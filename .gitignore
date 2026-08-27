@@ -1,0 +1,33 @@
+# Python virtual environments & dependencies
+venv/
+.venv/
+env/
+ENV/
+requirements-dev.txt
+
+# Python cached files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# Databases
+*.db
+*.sqlite3
+
+# Node modules & production builds
+node_modules/
+dist/
+.env
+.env.local
+
+# ML Models & metrics binaries (auto-generated)
+backend/app/models/
+*.joblib
+*.pkl
+
+# Editor config files
+.vscode/
+.idea/
+.DS_Store
