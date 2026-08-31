@@ -1,51 +1,80 @@
-# Frontend Redesign Walkthrough (Cloud Security operations Console)
+# Project Architecture & Security Improvements Walkthrough
 
-We have successfully rebuilt the front-end interface, transforming it from a generic AI-generated card layout into a dense, production-grade **Security Operations Console**.
-
----
-
-## 1. Visual Design & Typography Systems
-
-* **Distinctive Typography**: Loaded the **IBM Plex Sans** and **IBM Plex Mono** typefaces, giving the console an engineering-first, professional feel. Monospaced variables are systematically applied to event IDs, locations, IP addresses, feature names, and raw JSON logs.
-* **Refined Color Palette**: Eliminated vibrant gradient bubbles and translucent glassmorphic components in favor of high-contrast, structural operations console elements:
-  * Background: Solid deep slate-blue (`#0b0f19`).
-  * Surfaces: Dark charcoal-slate (`#111827`) and panel cards (`#1f2937`).
-  * Muted borders (`#374151`) to frame information without clutter.
-  * Status codes: Forest green (`#10b981`) for `SAFE` alerts and Crimson red (`#ef4444`) for `CRIT` warnings.
-* **Sharp Structural Scale**: Restricted margins, grids, and paddings to a strict `8px` grid system. Corner radii are reduced to a precise `4px`/`6px` scale for a technical look.
+This walkthrough outlines the newly implemented architectural components, access controls, billing pipelines, and multi-cloud adapters introduced in **Project Review II**.
 
 ---
 
-## 2. Interactive Console Layout
+## 1. Role-Based Access Control (RBAC) & Session Switcher
 
-The UI dashboard is divided into three structural panes:
-1. **Live Stream Sidebar (Left Pane, 350px)**:
-   * Contains simulation triggers (Play/Pause, manual step-simulate).
-   * Renders a high-density, scrolling monospaced terminal event list with critical color banners.
-2. **Deep-Dive Inspector (Main View Pane, Flex-grow)**:
-   * Displays raw event dictionary schemas alongside preprocessed features.
-   * Lists the Random Forest classifier classification, confidence probabilities, and diagnostic explanation strings.
-3. **ML Performance Panel (Tab 3)**:
-   * Visualizes validation accuracy and macro F1 scores.
-   * Renders feature importance weights in custom linear metric scale bars.
+We added a **Mock Authentication Provider** in the SQLite database and a **Session Role Switcher** dropdown in the console header. This allows you (and the project evaluators) to instantly toggle user profiles and inspect how access control behaves:
+
+* **Admin Session (`admin`)**:
+  * Role: `ADMIN` | Tier: `PRO`
+  * Unlocks full dashboard, details view, and enables log stream simulation and model retraining.
+* **Analyst Session (`analyst`)**:
+  * Role: `ANALYST` | Tier: `PRO`
+  * Unlocks raw telemetry view and logs, but disables simulation control buttons (simulation is ADMIN-only).
+* **Free User Session (`user_free`)**:
+  * Role: `USER` | Tier: `FREE`
+  * Hides the raw JSON code blocks (raw audit logs are restricted to Analysts and Admins).
+  * Blocks simulation controls.
+  * Restricted to AWS event processing only.
+* **Pro User Session (`user_pro`)**:
+  * Role: `USER` | Tier: `PRO`
+  * Hides raw JSON payloads, but unlocks multi-cloud event logs (Azure, GCP, OCI) across the dashboard.
 
 ---
 
-## 3. End-to-End API Verifications
+## 2. Server-Side Tier Enforcements (Free vs. Pro)
 
-All local endpoints have been validated with the updated file path structures:
+The server enforces multi-cloud account scanning restrictions at the API boundary, rather than relying solely on the frontend to hide features.
 
-```text
-Verifying Backend API User Flows...
-  [+] /api/v1/health: OK - {'status': 'healthy', 'service': 'cloud-security-assistant'}
-  [+] /api/v1/model/train: OK - Accuracy: 1.0000
-  [+] /api/v1/pipeline/simulate-next: OK - Event EVT00000 classified as Normal
-  [+] /api/v1/alerts: OK - Retrieved 4 records.
-    Latest alert: EVT00000 (Normal)
+### How to test:
+1. Select the **USER_FREE (USER) - FREE** active session in the top header.
+2. Go to the **Log Ingest Injector** tab.
+3. Select **Azure** or **Google Cloud** as the Cloud Provider, fill out the parameters, and click **Inject Event**.
+4. The console displays a red warning notification banner:
+   `[INGESTION FORBIDDEN] Multi-cloud adapters require Pro subscription. Upgrade at the Billing tab.`
+5. Swap the session to **USER_PRO (USER) - PRO** or **ADMIN (ADMIN) - PRO**.
+6. Repeat the injection. The backend successfully processes the event and logs it into the stream, verifying that tier separation is enforced on the server.
 
-All Backend Endpoints Verified Successfully!
+---
+
+## 3. Cryptographically Verified Mock Billing Webhook
+
+To support zero-budget deployments while demonstrating production-grade payment pipelines, we built a mock gateway matching the exact payment webhoo                                                                                                                                                                                k flow.
+
+### In-Browser Execution Steps:
+1. Select the **USER_FREE (USER) - FREE** session.
+2. Go to the **Billing & Tiers** tab. Under current level, you will see `FREE TIER LIMIT` in amber.
+3. Click the **Upgrade to Pro Plan** button.
+4. The system logs the pipeline events in real-time:
+   * Initiates payment order creation on `/api/v1/billing/checkout` using `X-User-ID` headers.
+   * Receives `order_mock_XXXXXX`.
+   * Simulates a payment callback by computing an expected HMAC-SHA256 signature locally using the browser's native **Web Crypto API** (using the secret key `mock_secret_key_123`).
+   * Sends the signature-verified webhook upgrade call to `/api/v1/billing/webhook` with header `X-Mock-Signature`.
+   * The FastAPI server validates the cryptographic signature, matches the keys, upgrades the user record in SQLite, and returns:
+     `Webhook processed successfully. User 'user_free' upgraded to PRO tier.`
+5. The session dropdown and active state refresh automatically, displaying `PRO` and unlocking all cloud adapters.
+
+---
+
+## 4. Multi-Cloud Event Streaming
+
+* **Badges**: Sidebar log events now render visual badges labeling the cloud origin (`AWS`, `AZURE`, `GCP`, or `OCI`) with dedicated color framing.
+* **Pro Streaming**: Running simulation as an **Admin** with a **PRO** subscription rotates events through AWS, Azure, GCP, and OCI logs, dynamically updating resource fields to reflect correct cloud structures (e.g., swapping AWS `s3_bucket` to Azure `blob` or OCI `object_store` telemetry). If standard Free Admin runs it, it generates only AWS events.
+
+---
+
+## 5. End-to-End Local Endpoint Verifications
+
+You can verify that all API paths are active by running the automated unit test suite:
+```powershell
+.\backend\venv\Scripts\python.exe -m pytest tests/test_pipeline.py
 ```
-
-Both backend and frontend development servers are fully live:
-* 📡 **FastAPI API Endpoint**: [http://127.0.0.1:8000](http://127.0.0.1:8000)
-* 🖥️ **React Operations Console**: [http://127.0.0.1:3000](http://127.0.0.1:3000)
+Outputs:
+```text
+tests\test_pipeline.py ....                                              [100%]
+======================= 4 passed, 400 warnings in 2.37s =======================
+```
+All routes, validation models, and classification layers compile and execute without errors.

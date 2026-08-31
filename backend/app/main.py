@@ -2,18 +2,56 @@ import os
 import json
 import random
 import pandas as pd
+from datetime import datetime, timedelta
 from typing import List, Dict, Any
-from fastapi import FastAPI, HTTPException, Depends, Query
+from fastapi import FastAPI, HTTPException, Depends, Query, Header
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from prometheus_client import generate_latest, CONTENT_TYPE_LATEST, Counter, Gauge
 
-from .db import init_db, get_db, SecurityAlert
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from .config import DEMO_MODE, settings
+from .db import init_db, get_db, SecurityAlert, SystemUser
 from .modules.module1_event_collection import SecurityEvent, validate_raw_event
 from .modules.module2_preprocessing import preprocess_single_event
 from .modules.module3_threat_detection import train_threat_model, predict_threat, get_loaded_metrics
 
 app = FastAPI(title="Cloud Security Threat Detection Backend API")
+
+security = HTTPBearer(auto_error=False)
+
+async def get_current_user(
+    x_user_id: str = Header("usr_free"), 
+    credentials: HTTPAuthorizationCredentials = Depends(security), 
+    db: Session = Depends(get_db)
+):
+    if DEMO_MODE:
+        user = db.query(SystemUser).filter(SystemUser.user_id == x_user_id).first()
+        if not user:
+            user = db.query(SystemUser).filter(SystemUser.user_id == "usr_free").first()
+        return user
+    else:
+        if not credentials:
+            raise HTTPException(status_code=401, detail="Missing authorization credentials (JWT)")
+        token = credentials.credentials
+        try:
+            import jwt
+            payload = jwt.decode(token, settings["SUPABASE_JWT_SECRET"], algorithms=["HS256"], audience="authenticated")
+            user_id = payload.get("sub")
+            if not user_id:
+                raise HTTPException(status_code=401, detail="Invalid token: missing sub claim")
+            user = db.query(SystemUser).filter(SystemUser.user_id == user_id).first()
+            if not user:
+                # Register user in DB
+                email = payload.get("email", f"user_{user_id[:8]}")
+                user = SystemUser(user_id=user_id, username=email, role="USER", is_pro=0)
+                db.add(user)
+                db.commit()
+                db.refresh(user)
+            return user
+        except Exception as e:
+            raise HTTPException(status_code=401, detail=f"JWT verification failed: {str(e)}")
+
 
 # Enable CORS for React integration
 app.add_middleware(
@@ -56,9 +94,128 @@ def startup_event():
         else:
             print("[Startup] Training data not found. Model will be trained on demand.")
 
+@app.get("/api/v1/auth/users")
+async def list_users(db: Session = Depends(get_db)):
+    users = db.query(SystemUser).all()
+    return [{"user_id": u.user_id, "username": u.username, "role": u.role, "is_pro": u.is_pro} for u in users]
+
+from fastapi import Request
+
+@app.get("/api/v1/auth/session")
+async def get_session(current_user: SystemUser = Depends(get_current_user)):
+    return {
+        "user_id": current_user.user_id,
+        "username": current_user.username,
+        "role": current_user.role,
+        "is_pro": current_user.is_pro,
+        "subscription_expires_at": current_user.subscription_expires_at
+    }
+
+@app.post("/api/v1/billing/checkout")
+async def billing_checkout(payload: Dict[str, Any], current_user: SystemUser = Depends(get_current_user), db: Session = Depends(get_db)):
+    if not current_user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    amount = 49900  # 499 INR in paise
+    order_id = f"order_mock_{random.randint(100000, 999999)}"
+    
+    if not DEMO_MODE:
+        try:
+            import razorpay
+            client = razorpay.Client(auth=(settings["RAZORPAY_KEY_ID"], settings["RAZORPAY_KEY_SECRET"]))
+            order_data = {
+                "amount": amount,
+                "currency": "INR",
+                "receipt": f"receipt_{current_user.user_id}",
+                "notes": {
+                    "user_id": current_user.user_id,
+                    "plan": "pro"
+                }
+            }
+            order = client.order.create(data=order_data)
+            order_id = order["id"]
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Razorpay order creation failed: {str(e)}")
+            
+    return {
+        "status": "created",
+        "order_id": order_id,
+        "amount": amount,
+        "currency": "INR",
+        "user_id": current_user.user_id
+    }
+
+@app.post("/api/v1/billing/webhook")
+async def billing_webhook(
+    request: Request,
+    payload: Dict[str, Any],
+    x_mock_signature: str = Header(None),
+    x_razorpay_signature: str = Header(None),
+    db: Session = Depends(get_db)
+):
+    if DEMO_MODE:
+        payment_id = payload.get("payment_id")
+        order_id = payload.get("order_id")
+        user_id = payload.get("user_id")
+        
+        if not payment_id or not order_id or not user_id:
+            raise HTTPException(status_code=400, detail="Missing payment parameters")
+            
+        secret = "mock_secret_key_123"
+        raw_payload = f"{payment_id}:{order_id}"
+        import hmac, hashlib
+        expected_signature = hmac.new(secret.encode(), raw_payload.encode(), hashlib.sha256).hexdigest()
+        
+        if not x_mock_signature or not hmac.compare_digest(expected_signature, x_mock_signature):
+            raise HTTPException(status_code=401, detail="Invalid webhook signature. Access denied.")
+            
+        user_id_to_upgrade = user_id
+    else:
+        if not x_razorpay_signature:
+            raise HTTPException(status_code=400, detail="Missing X-Razorpay-Signature header")
+            
+        body = await request.body()
+        import hmac, hashlib
+        expected_signature = hmac.new(
+            settings["RAZORPAY_WEBHOOK_SECRET"].encode(), 
+            body, 
+            hashlib.sha256
+        ).hexdigest()
+        
+        if not hmac.compare_digest(expected_signature, x_razorpay_signature):
+            raise HTTPException(status_code=401, detail="Invalid Razorpay webhook signature")
+            
+        event = payload.get("event")
+        if event != "payment.captured":
+            return {"status": "ignored", "message": "Only payment.captured event is processed."}
+            
+        payment_entity = payload.get("payload", {}).get("payment", {}).get("entity", {})
+        user_id_to_upgrade = payment_entity.get("notes", {}).get("user_id")
+        if not user_id_to_upgrade:
+            raise HTTPException(status_code=400, detail="Missing user_id in payment notes")
+            
+    user = db.query(SystemUser).filter(SystemUser.user_id == user_id_to_upgrade).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    user.is_pro = 1
+    user.subscription_expires_at = (datetime.utcnow() + timedelta(days=30)).isoformat()
+    db.commit()
+    db.refresh(user)
+    
+    return {
+        "status": "verified",
+        "message": f"Webhook processed successfully. User '{user.username}' upgraded to PRO tier."
+    }
+
 @app.get("/api/v1/health")
 async def health_check():
-    return {"status": "healthy", "service": "cloud-security-assistant"}
+    return {
+        "status": "healthy",
+        "service": "cloud-security-assistant",
+        "demo_mode": DEMO_MODE
+    }
+
 
 @app.post("/api/v1/events/collect")
 async def collect_event(event: Dict[str, Any]):
@@ -108,11 +265,21 @@ async def detect_threat(features: Dict[str, Any]):
         raise HTTPException(status_code=500, detail=f"Module 3 Threat Detection Error: {str(e)}")
 
 @app.post("/api/v1/pipeline/run")
-async def run_pipeline(raw_event: Dict[str, Any], db: Session = Depends(get_db)):
+async def run_pipeline(raw_event: Dict[str, Any], current_user: SystemUser = Depends(get_current_user), db: Session = Depends(get_db)):
     """
     Integrates Modules 1, 2, and 3: Runs full pipeline on a single incoming event
     and logs the alert/status to SQLite for dashboard view.
     """
+    user = current_user
+        
+    # Enforce multi-cloud restriction for non-pro users
+    provider = raw_event.get("cloud_provider", "aws").lower()
+    if user.is_pro == 0 and provider != "aws":
+        raise HTTPException(
+            status_code=403,
+            detail="Multi-cloud adapters require Pro subscription. Upgrade at the Billing tab."
+        )
+
     try:
         # Step 1: Validate Schema (Module 1)
         validated = validate_raw_event(raw_event)
@@ -134,6 +301,7 @@ async def run_pipeline(raw_event: Dict[str, Any], db: Session = Depends(get_db))
         alert_db = SecurityAlert(
             event_id=validated.event_id,
             timestamp=validated.timestamp,
+            cloud_provider=validated.cloud_provider,
             user_id=validated.user_id,
             event_type=validated.event_type,
             ip_address=validated.ip_address,
@@ -161,11 +329,13 @@ async def run_pipeline(raw_event: Dict[str, Any], db: Session = Depends(get_db))
 
         return {
             "event_id": validated.event_id,
-            "raw_event": raw_event,
+            "raw_event": {**raw_event, "cloud_provider": validated.cloud_provider},
             "preprocessed_features": features,
             "detection_result": prediction
         }
     except Exception as e:
+        if isinstance(e, HTTPException):
+            raise e
         raise HTTPException(status_code=400, detail=f"Pipeline Execution Failed: {str(e)}")
 
 @app.get("/api/v1/alerts", response_model=List[Dict[str, Any]])
@@ -179,6 +349,7 @@ async def list_alerts(limit: int = 50, db: Session = Depends(get_db)):
         results.append({
             "event_id": alert.event_id,
             "timestamp": alert.timestamp,
+            "cloud_provider": alert.cloud_provider,
             "user_id": alert.user_id,
             "event_type": alert.event_type,
             "ip_address": alert.ip_address,
@@ -195,10 +366,17 @@ async def list_alerts(limit: int = 50, db: Session = Depends(get_db)):
     return results
 
 @app.post("/api/v1/model/train")
-async def train_model_endpoint():
+async def train_model_endpoint(current_user: SystemUser = Depends(get_current_user), db: Session = Depends(get_db)):
     """
-    Triggers model training pipeline and outputs metrics.
+    Triggers model training pipeline and outputs metrics. Only accessible by ADMIN.
     """
+    user = current_user
+    if not user or user.role != "ADMIN":
+        raise HTTPException(
+            status_code=403, 
+            detail="Admin privilege required. Your role must be ADMIN."
+        )
+        
     train_path = os.path.join(ROOT_DIR, "data", "raw", "security_events.csv")
     eval_path = os.path.join(ROOT_DIR, "data", "raw", "security_events_eval.csv")
     
@@ -226,11 +404,19 @@ async def get_metrics_endpoint():
     return metrics
 
 @app.post("/api/v1/pipeline/simulate-next")
-async def simulate_next_event(db: Session = Depends(get_db)):
+async def simulate_next_event(current_user: SystemUser = Depends(get_current_user), db: Session = Depends(get_db)):
     """
     Simulates a streaming-event ingestion by taking the next record from the
     evaluation dataset, passing it through the pipeline, and saving it to SQLite.
+    Only accessible by ADMIN.
     """
+    user = current_user
+    if not user or user.role != "ADMIN":
+        raise HTTPException(
+            status_code=403, 
+            detail="Admin privilege required. Your role must be ADMIN."
+        )
+        
     global SIMULATION_INDEX
     eval_path = os.path.join(ROOT_DIR, "data", "raw", "security_events_eval.csv")
     
@@ -246,24 +432,42 @@ async def simulate_next_event(db: Session = Depends(get_db)):
         row = df.iloc[SIMULATION_INDEX % len(df)]
         SIMULATION_INDEX += 1
         
-        # Parse fields to dict
+        # Decide simulated provider based on user tier
+        if user.is_pro == 1:
+            providers = ["aws", "azure", "gcp", "oci"]
+            simulated_provider = providers[SIMULATION_INDEX % 4]
+        else:
+            simulated_provider = "aws"
+            
+        # Adjust simulated resource names to reflect the provider
+        resource = str(row["resource"])
+        if simulated_provider == "azure":
+            resource = resource.replace("s3_bucket", "azure_blob").replace("ec2_", "azure_vm_").replace("kms_keys", "azure_keyvault")
+        elif simulated_provider == "gcp":
+            resource = resource.replace("s3_bucket", "gcp_cloud_storage").replace("ec2_", "gcp_compute_").replace("kms_keys", "gcp_kms")
+        elif simulated_provider == "oci":
+            resource = resource.replace("s3_bucket", "oci_object_store").replace("ec2_", "oci_compute_").replace("kms_keys", "oci_vault")
+            
         raw_event = {
             "event_id": str(row["event_id"]),
             "timestamp": str(row["timestamp"]),
+            "cloud_provider": simulated_provider,
             "user_id": str(row["user_id"]),
             "event_type": str(row["event_type"]),
             "ip_address": str(row["ip_address"]),
             "location": str(row["location"]) if pd.notna(row["location"]) else "Unknown",
             "failed_attempts": int(row["failed_attempts"]) if pd.notna(row["failed_attempts"]) else 0,
-            "resource": str(row["resource"]),
+            "resource": resource,
             "request_frequency": int(row["request_frequency"]) if pd.notna(row["request_frequency"]) else 1
         }
         
         # Execute pipeline
-        result = await run_pipeline(raw_event, db)
+        result = await run_pipeline(raw_event, x_user_id, db)
         return result
         
     except Exception as e:
+        if isinstance(e, HTTPException):
+            raise e
         raise HTTPException(status_code=500, detail=f"Simulation failed: {str(e)}")
 
 @app.get("/metrics")

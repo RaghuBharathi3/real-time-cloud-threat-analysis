@@ -27,3 +27,7 @@ This document summarizes the toughest technical challenges when scaling this pro
 ## 4. Automated Containment & System Safety
 * **The Challenge**: Completely automating incident response actions (such as auto-blocking IPs or deleting compromised VMs) is high-risk. A false positive by the ML classifier could shut down legitimate admin sessions or disconnect a production database.
 * **The Alternative**: **Human-in-the-Loop (HITL) Approval Gates**. Design the system to generate containment command scripts and show them in the console, requiring an analyst to click an explicit **"Approve Action"** button to execute the response.
+
+
+
+ther is a main problem where ther is aproblem of 

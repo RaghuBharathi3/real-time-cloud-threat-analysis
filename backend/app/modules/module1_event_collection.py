@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field, field_validator
 class SecurityEvent(BaseModel):
     event_id: str = Field(..., description="Unique event identifier")
     timestamp: str = Field(..., description="ISO 8601 formatted timestamp")
+    cloud_provider: str = Field("aws", description="Cloud provider name: aws, azure, gcp, oci")
     user_id: str = Field(..., description="Identifier of the user")
     event_type: str = Field(..., description="Type of event: login, resource_access, api_call")
     ip_address: str = Field(..., description="Source IPv4 address")

@@ -9,7 +9,7 @@ When presenting, position the project as an **intelligent cloud security decisio
 
 ### How to frame it:
 > *"Existing cloud native security monitors, such as AWS GuardDuty or Google Cloud Security Command Center, do an excellent job of generating alerts. However, security analysts are often overwhelmed by 'alert fatigue.' Our project, **'Generative AI-Powered Cloud Security Assistant for Real-Time Threat Analysis,'** is designed to ingest raw cloud events, translate them into structured machine-learning feature vectors, classify the threat, and eventually supply contextual generative AI explanations and response recommendations to support security teams. For this review, we have implemented the foundation: **Modules 1, 2, and 3**, establishing a complete real-time ingestion, preprocessing, and Random Forest classification pipeline."*
-
+  
 ---
 
 ## 2. Walkthrough of the Implemented Modules (1–3)

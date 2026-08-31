@@ -8,3 +8,7 @@ pytest>=7.0.0
 httpx>=0.24.0
 python-multipart>=0.0.6
 prometheus-client>=0.17.0
+python-dotenv>=1.0.0
+PyJWT>=2.0.0
+razorpay>=1.4.0
+

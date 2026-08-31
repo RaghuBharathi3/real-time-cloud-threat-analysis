@@ -18,7 +18,11 @@ def test_api():
         
     # 2. Train Model
     try:
-        req = urllib.request.Request(f"{API_URL}/api/v1/model/train", method="POST")
+        req = urllib.request.Request(
+            f"{API_URL}/api/v1/model/train",
+            headers={"X-User-ID": "usr_admin"},
+            method="POST"
+        )
         with urllib.request.urlopen(req) as r:
             res = json.loads(r.read().decode())
             print(f"  [+] /api/v1/model/train: OK - Accuracy: {res['metrics']['accuracy']:.4f}")
@@ -28,13 +32,18 @@ def test_api():
 
     # 3. Simulate Event Ingestion
     try:
-        req = urllib.request.Request(f"{API_URL}/api/v1/pipeline/simulate-next", method="POST")
+        req = urllib.request.Request(
+            f"{API_URL}/api/v1/pipeline/simulate-next",
+            headers={"X-User-ID": "usr_admin"},
+            method="POST"
+        )
         with urllib.request.urlopen(req) as r:
             res = json.loads(r.read().decode())
             print(f"  [+] /api/v1/pipeline/simulate-next: OK - Event {res['event_id']} classified as {res['detection_result']['threat_status']}")
     except Exception as e:
         print(f"  [-] /api/v1/pipeline/simulate-next: FAILED - {e}")
         sys.exit(1)
+
 
     # 4. Fetch alerts
     try:

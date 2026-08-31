@@ -31,3 +31,10 @@ backend/app/models/
 .vscode/
 .idea/
 .DS_Store
+
+# Credentials & secrets protection
+.env.production
+*.pem
+*.key
+*credentials*.json
+*service-account*.json
