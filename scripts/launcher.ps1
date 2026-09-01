@@ -110,8 +110,14 @@ Free-Port 5173
 # ------------------------------------------------------------------------------
 Write-Host "[3/6] Starting Backend API (Port 8000)..." -NoNewline
 
-$BackendCmd = "cd /d `"$RootDir\backend`" && `"$RootDir\backend\venv\Scripts\uvicorn.exe`" app.main:app --host 127.0.0.1 --port 8000 --reload"
-$BackendProcess = Start-Process cmd.exe -ArgumentList "/k title [CLOUD-SECURITY] Backend API && $BackendCmd" -PassThru -WindowStyle Minimized
+$BackendExe = Join-Path $RootDir "backend\venv\Scripts\uvicorn.exe"
+$BackendDir = Join-Path $RootDir "backend"
+
+$BackendProcess = Start-Process -FilePath $BackendExe `
+    -ArgumentList "app.main:app", "--app-dir", "`"$BackendDir`"", "--host", "127.0.0.1", "--port", "8000", "--reload" `
+    -WorkingDirectory $BackendDir `
+    -PassThru `
+    -WindowStyle Minimized
 
 Set-Content -Path (Join-Path $LogsDir "backend.pid") -Value $BackendProcess.Id
 
@@ -122,8 +128,13 @@ Write-Host "        [OK]" -ForegroundColor Green
 # ------------------------------------------------------------------------------
 Write-Host "[4/6] Starting Frontend Console (Port 5173)..." -NoNewline
 
-$FrontendCmd = "cd /d `"$RootDir\frontend`" && npm run dev -- --host 127.0.0.1 --port 5173"
-$FrontendProcess = Start-Process cmd.exe -ArgumentList "/k title [CLOUD-SECURITY] Frontend Console && $FrontendCmd" -PassThru -WindowStyle Minimized
+$FrontendDir = Join-Path $RootDir "frontend"
+
+$FrontendProcess = Start-Process -FilePath "cmd.exe" `
+    -ArgumentList "/c", "npm", "run", "dev" `
+    -WorkingDirectory $FrontendDir `
+    -PassThru `
+    -WindowStyle Minimized
 
 Set-Content -Path (Join-Path $LogsDir "frontend.pid") -Value $FrontendProcess.Id
 

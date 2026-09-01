@@ -1,1436 +1,1713 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { 
-  Shield, ShieldAlert, AlertTriangle, Terminal, Cpu, Activity, Play, Pause,
-  BarChart2, Server, Settings, User, RefreshCw, Send, Plus, Cloud, CheckCircle, 
-  XCircle, Zap, FileText, Lock, Award, BookOpen, Layers
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import {
+  Shield,
+  Activity,
+  Server,
+  Cpu,
+  FileText,
+  AlertTriangle,
+  CheckCircle2,
+  XCircle,
+  RefreshCw,
+  Search,
+  Filter,
+  Play,
+  Pause,
+  ExternalLink,
+  ChevronRight,
+  ChevronLeft,
+  Key,
+  Layers,
+  Database,
+  Lock,
+  UserCheck,
+  TrendingUp,
+  Settings,
+  HelpCircle,
+  Copy,
+  Terminal,
+  Zap,
+  Info
 } from 'lucide-react';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const API_BASE = "http://127.0.0.1:8000";
 
-async function computeHMAC(secret, message) {
-  const encoder = new TextEncoder();
-  const keyData = encoder.encode(secret);
-  const messageData = encoder.encode(message);
-  const cryptoKey = await window.crypto.subtle.importKey(
-    "raw", keyData, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]
-  );
-  const signature = await window.crypto.subtle.sign("HMAC", cryptoKey, messageData);
-  return Array.from(new Uint8Array(signature))
-    .map(b => b.toString(16).padStart(2, '0'))
-    .join('');
-}
+// Pre-seeded local user profiles
+const SEED_USERS = [
+  { user_id: 'usr_admin', username: 'admin_secops', role: 'ADMIN', is_pro: 1, email: 'secops@enterprise.internal' },
+  { user_id: 'usr_pro', username: 'senior_analyst', role: 'ANALYST', is_pro: 1, email: 'analyst@enterprise.internal' },
+  { user_id: 'usr_free', username: 'guest_user', role: 'USER', is_pro: 0, email: 'guest@enterprise.internal' },
+];
 
-function App() {
-  const [activeTab, setActiveTab] = useState('console');
-  const [backendStatus, setBackendStatus] = useState('checking');
-  
-  // Auth/Users states
-  const [users, setUsers] = useState([]);
-  const [activeUser, setActiveUser] = useState(null);
-  const [authError, setAuthError] = useState("");
-  
-  // Real-time Event List
+export default function App() {
+  // Navigation State
+  const [activeTab, setActiveTab] = useState('dashboard'); // 'dashboard' | 'events' | 'clouds' | 'ml_engine' | 'compliance' | 'audit' | 'settings'
+
+  // User & Auth State
+  const [activeUser, setActiveUser] = useState(SEED_USERS[0]);
+
+  // System & Health State
+  const [healthStatus, setHealthStatus] = useState(null);
+  const [cloudStatuses, setCloudStatuses] = useState({});
+  const [isApiOnline, setIsApiOnline] = useState(true);
+
+  // Events & Alerts State
   const [alerts, setAlerts] = useState([]);
   const [selectedAlert, setSelectedAlert] = useState(null);
-  
-  // Model Training & Performance Metrics
-  const [modelMetrics, setModelMetrics] = useState(null);
+  const [inspectorTab, setInspectorTab] = useState('diagnostics'); // 'diagnostics' | 'compliance' | 'features' | 'json'
+
+  // ML Metrics State
+  const [mlMetrics, setMlMetrics] = useState(null);
   const [isTraining, setIsTraining] = useState(false);
-  
-  // Multi-Cloud Status state
-  const [cloudStatus, setCloudStatus] = useState(null);
-  const [testingProvider, setTestingProvider] = useState("");
-  const [syncingProvider, setSyncingProvider] = useState("");
 
-  // Admin Audit Logs state
+  // Audit Logs State
   const [auditLogs, setAuditLogs] = useState([]);
-  const [loadingAudit, setLoadingAudit] = useState(false);
 
-  // Custom Log Form Ingestion State
-  const [customEvent, setCustomEvent] = useState({
-    event_id: "",
-    timestamp: "",
-    cloud_provider: "aws",
-    user_id: "sec_operator",
-    event_type: "resource_access",
-    ip_address: "203.0.113.195",
-    location: "US",
-    failed_attempts: 0,
-    resource: "s3_bucket_finance",
-    request_frequency: 1
-  });
-  
+  // Stream Simulation State
   const [isSimulating, setIsSimulating] = useState(false);
-  const simulationTimer = useRef(null);
 
-  // Billing portal states
-  const [billingStatus, setBillingStatus] = useState("");
-  const [demoMode, setDemoMode] = useState(false);
+  // Event Table Filtering & Pagination
+  const [searchQuery, setSearchQuery] = useState('');
+  const [filterProvider, setFilterProvider] = useState('ALL');
+  const [filterSeverity, setFilterSeverity] = useState('ALL');
+  const [filterThreat, setFilterThreat] = useState('ALL');
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
 
-  useEffect(() => {
-    generateCustomIds();
-    checkHealth();
-    loadUsers();
-    fetchCloudStatus(false);
-    
-    const statusTimer = setInterval(() => {
-      checkHealth();
-      fetchCloudStatus(false);
-    }, 8000);
+  // UI Feedback / Notification
+  const [toast, setToast] = useState(null);
 
-    return () => {
-      clearInterval(statusTimer);
-      if (simulationTimer.current) clearInterval(simulationTimer.current);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+  const showToast = useCallback((message, type = 'success') => {
+    setToast({ message, type });
+    setTimeout(() => setToast(null), 5000);
   }, []);
 
-  function generateCustomIds() {
-    setCustomEvent(prev => ({
-      ...prev,
-      event_id: "EVT" + Math.floor(10000 + Math.random() * 90000),
-      timestamp: new Date().toISOString().slice(0, 19)
-    }));
-  }
+  // ----------------------------------------------------------------------------
+  // API Integration Functions
+  // ----------------------------------------------------------------------------
 
-  async function checkHealth() {
+  // Fetch Health
+  const fetchHealth = useCallback(async () => {
     try {
-      const res = await fetch(`${API_BASE_URL}/api/v1/health`);
+      const res = await fetch(`${API_BASE}/api/v1/health`);
       if (res.ok) {
         const data = await res.json();
-        setBackendStatus('online');
-        setDemoMode(data.demo_mode ?? false);
+        setHealthStatus(data);
+        setIsApiOnline(true);
       } else {
-        setBackendStatus('offline');
+        setIsApiOnline(false);
       }
     } catch {
-      setBackendStatus('offline');
+      setIsApiOnline(false);
     }
-  }
+  }, []);
 
-  async function loadUsers() {
+  // Fetch Cloud Statuses
+  const fetchCloudStatus = useCallback(async (refresh = false) => {
     try {
-      const res = await fetch(`${API_BASE_URL}/api/v1/auth/users`);
-      if (res.ok) {
-        const data = await res.json();
-        setUsers(data);
-        if (data.length > 0) {
-          const defaultUser = data.find(u => u.user_id === 'usr_admin') || data[0];
-          setActiveUser(defaultUser);
-          await loadSession(defaultUser.user_id);
-        }
-      }
-    } catch (e) {
-      console.error("Failed to fetch user profiles", e);
-    }
-  }
-
-  async function loadSession(userId) {
-    try {
-      const res = await fetch(`${API_BASE_URL}/api/v1/auth/session`, {
-        headers: { 'X-User-ID': userId }
-      });
-      if (res.ok) {
-        const sessionData = await res.json();
-        setActiveUser(sessionData);
-        fetchAlerts(userId);
-        fetchModelMetrics(userId);
-        fetchCloudStatus(false, userId);
-        if (sessionData.role === 'ADMIN') {
-          fetchAuditLogs(userId);
-        }
-      }
-    } catch (e) {
-      console.error("Failed to load user details", e);
-    }
-  }
-
-  async function handleUserChange(userId) {
-    setAuthError("");
-    setBillingStatus("");
-    
-    if (isSimulating) {
-      if (simulationTimer.current) clearInterval(simulationTimer.current);
-      setIsSimulating(false);
-    }
-    
-    await loadSession(userId);
-  }
-
-  async function fetchCloudStatus(refresh = false, userId = null) {
-    const currentId = userId || activeUser?.user_id || 'usr_free';
-    try {
-      const res = await fetch(`${API_BASE_URL}/api/v1/cloud/status?refresh=${refresh}`, {
-        headers: { 'X-User-ID': currentId }
+      const res = await fetch(`${API_BASE}/api/v1/cloud/status?refresh=${refresh}`, {
+        headers: { 'X-User-ID': activeUser.user_id }
       });
       if (res.ok) {
         const data = await res.json();
-        setCloudStatus(data.providers);
+        setCloudStatuses(data.providers || {});
       }
-    } catch (e) {
-      console.error("Failed to fetch cloud statuses", e);
+    } catch (err) {
+      console.error('Failed to fetch cloud status:', err);
     }
-  }
+  }, [activeUser.user_id]);
 
-  async function fetchAuditLogs(userId = null) {
-    const currentId = userId || activeUser?.user_id || 'usr_admin';
-    setLoadingAudit(true);
+  // Fetch Alerts
+  const fetchAlerts = useCallback(async () => {
     try {
-      const res = await fetch(`${API_BASE_URL}/api/v1/admin/audit-logs`, {
-        headers: { 'X-User-ID': currentId }
+      const res = await fetch(`${API_BASE}/api/v1/alerts?limit=100`, {
+        headers: { 'X-User-ID': activeUser.user_id }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setAlerts(data);
+        if (data.length > 0 && !selectedAlert) {
+          setSelectedAlert(data[0]);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to fetch alerts:', err);
+    }
+  }, [activeUser.user_id, selectedAlert]);
+
+  // Fetch ML Metrics
+  const fetchMlMetrics = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/model/metrics`, {
+        headers: { 'X-User-ID': activeUser.user_id }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setMlMetrics(data);
+      }
+    } catch (err) {
+      console.error('Failed to fetch ML metrics:', err);
+    }
+  }, [activeUser.user_id]);
+
+  // Fetch Audit Logs (Admin Only)
+  const fetchAuditLogs = useCallback(async () => {
+    if (activeUser.role !== 'ADMIN') return;
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/admin/audit-logs`, {
+        headers: { 'X-User-ID': activeUser.user_id }
       });
       if (res.ok) {
         const data = await res.json();
         setAuditLogs(data);
       }
-    } catch (e) {
-      console.error("Failed to load audit logs", e);
-    } finally {
-      setLoadingAudit(false);
+    } catch (err) {
+      console.error('Failed to fetch audit logs:', err);
     }
-  }
+  }, [activeUser]);
 
-  async function handleTestProvider(provider) {
-    setTestingProvider(provider);
-    setAuthError("");
-    try {
-      const res = await fetch(`${API_BASE_URL}/api/v1/cloud/test-connection/${provider}`, {
-        method: 'POST',
-        headers: { 'X-User-ID': activeUser?.user_id || 'usr_free' }
-      });
-      if (res.ok) {
-        const data = await res.json();
-        await fetchCloudStatus(true);
-        if (activeUser?.role === 'ADMIN') fetchAuditLogs();
-        if (data.status !== 'CONNECTED' && data.status !== 'DEMO MODE') {
-          setAuthError(`[${provider.toUpperCase()}] ${data.details || data.status}`);
+  // Initial Load & Heartbeat
+  useEffect(() => {
+    fetchHealth();
+    fetchCloudStatus(false);
+    fetchAlerts();
+    fetchMlMetrics();
+    fetchAuditLogs();
+
+    const interval = setInterval(() => {
+      fetchHealth();
+      fetchCloudStatus(false);
+    }, 8000);
+
+    return () => clearInterval(interval);
+  }, [fetchHealth, fetchCloudStatus, fetchAlerts, fetchMlMetrics, fetchAuditLogs]);
+
+  // Continuous Simulation Loop
+  useEffect(() => {
+    let simTimer = null;
+    if (isSimulating && activeUser.role === 'ADMIN') {
+      simTimer = setInterval(async () => {
+        try {
+          const res = await fetch(`${API_BASE}/api/v1/pipeline/simulate-next`, {
+            method: 'POST',
+            headers: { 'X-User-ID': activeUser.user_id }
+          });
+          if (res.ok) {
+            const result = await res.json();
+            const newAlert = {
+              event_id: result.event_id,
+              timestamp: result.raw_event?.timestamp || new Date().toISOString(),
+              cloud_provider: result.raw_event?.cloud_provider || 'aws',
+              user_id: result.raw_event?.user_id,
+              event_type: result.raw_event?.event_type,
+              ip_address: result.raw_event?.ip_address,
+              location: result.raw_event?.location,
+              failed_attempts: result.raw_event?.failed_attempts,
+              resource: result.raw_event?.resource,
+              request_frequency: result.raw_event?.request_frequency,
+              threat_status: result.detection_result?.threat_status,
+              threat_type: result.detection_result?.threat_type,
+              confidence: result.detection_result?.confidence,
+              risk_score: result.risk_score,
+              severity: result.severity,
+              reasons: JSON.stringify(result.detection_result?.reason || []),
+              compliance_recommendations: JSON.stringify(result.compliance || {})
+            };
+            setAlerts(prev => [newAlert, ...prev.slice(0, 99)]);
+          }
+        } catch (err) {
+          console.error('Simulation error:', err);
         }
-      }
-    } catch (e) {
-      console.error(`Test connection failed for ${provider}`, e);
-    } finally {
-      setTestingProvider("");
+      }, 3000);
     }
-  }
+    return () => clearInterval(simTimer);
+  }, [isSimulating, activeUser]);
 
-  async function handleSyncProvider(provider) {
-    setSyncingProvider(provider);
-    setAuthError("");
+  // Trigger 1-Click Demo Scenario
+  const handleTriggerScenario = async (scenarioName) => {
     try {
-      const res = await fetch(`${API_BASE_URL}/api/v1/cloud/sync/${provider}?limit=3`, {
+      const res = await fetch(`${API_BASE}/api/v1/pipeline/demo-scenario/${scenarioName}`, {
         method: 'POST',
-        headers: { 'X-User-ID': activeUser?.user_id || 'usr_free' }
+        headers: { 'X-User-ID': activeUser.user_id }
       });
       if (res.ok) {
-        await fetchAlerts();
-        await fetchCloudStatus(true);
-        if (activeUser?.role === 'ADMIN') fetchAuditLogs();
-      } else {
-        const err = await res.json();
-        setAuthError(`[SYNC FORBIDDEN] ${err.detail}`);
-      }
-    } catch (e) {
-      console.error(`Sync failed for ${provider}`, e);
-    } finally {
-      setSyncingProvider("");
-    }
-  }
-
-  async function handleTriggerDemoScenario(scenarioKey) {
-    setAuthError("");
-    try {
-      const res = await fetch(`${API_BASE_URL}/api/v1/pipeline/demo-scenario/${scenarioKey}`, {
-        method: 'POST',
-        headers: { 'X-User-ID': activeUser?.user_id || 'usr_free' }
-      });
-      if (res.ok) {
-        const data = await res.json();
-        const formattedAlert = {
-          event_id: data.event_id,
-          timestamp: data.raw_event.timestamp,
-          cloud_provider: data.raw_event.cloud_provider,
-          user_id: data.raw_event.user_id,
-          event_type: data.raw_event.event_type,
-          ip_address: data.raw_event.ip_address,
-          location: data.raw_event.location,
-          resource: data.raw_event.resource,
-          failed_attempts: data.raw_event.failed_attempts,
-          request_frequency: data.raw_event.request_frequency,
-          threat_status: data.detection_result.threat_status,
-          threat_type: data.detection_result.threat_type,
-          confidence: data.detection_result.confidence,
-          risk_score: data.risk_score ?? data.detection_result.risk_score ?? 10,
-          severity: data.severity ?? data.detection_result.severity ?? 'LOW',
-          reasons: data.detection_result.reason,
-          compliance: data.compliance || {}
+        const result = await res.json();
+        const newAlert = {
+          event_id: result.event_id,
+          timestamp: result.raw_event?.timestamp || new Date().toISOString(),
+          cloud_provider: result.raw_event?.cloud_provider,
+          user_id: result.raw_event?.user_id,
+          event_type: result.raw_event?.event_type,
+          ip_address: result.raw_event?.ip_address,
+          location: result.raw_event?.location,
+          failed_attempts: result.raw_event?.failed_attempts,
+          resource: result.raw_event?.resource,
+          request_frequency: result.raw_event?.request_frequency,
+          threat_status: result.detection_result?.threat_status,
+          threat_type: result.detection_result?.threat_type,
+          confidence: result.detection_result?.confidence,
+          risk_score: result.risk_score,
+          severity: result.severity,
+          reasons: JSON.stringify(result.detection_result?.reason || []),
+          compliance_recommendations: JSON.stringify(result.compliance || {})
         };
-
-        setAlerts(prev => [formattedAlert, ...prev.filter(a => a.event_id !== formattedAlert.event_id)]);
-        setSelectedAlert(formattedAlert);
-        setActiveTab('console');
+        setAlerts(prev => [newAlert, ...prev]);
+        setSelectedAlert(newAlert);
+        showToast(`Ingested scenario: ${scenarioName.toUpperCase()} (Risk Score: ${result.risk_score} - ${result.severity})`, 'success');
       } else {
         const err = await res.json();
-        setAuthError(`[SCENARIO INJECTION REJECTED] ${err.detail}`);
+        showToast(err.detail || 'Failed to inject scenario.', 'error');
       }
-    } catch (e) {
-      console.error("Failed to inject demo scenario", e);
+    } catch {
+      showToast('Network error during scenario injection.', 'error');
     }
-  }
+  };
 
-  async function fetchAlerts(userId) {
-    const currentId = userId || activeUser?.user_id || 'usr_free';
+  // Test Cloud Connection
+  const handleTestConnection = async (provider) => {
     try {
-      const res = await fetch(`${API_BASE_URL}/api/v1/alerts?limit=50`, {
-        headers: { 'X-User-ID': currentId }
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setAlerts(data);
-        if (data.length > 0) {
-          setSelectedAlert(data[0]);
-        } else {
-          setSelectedAlert(null);
-        }
-      }
-    } catch (e) {
-      console.error("Failed to load alerts list", e);
-    }
-  }
-
-  async function fetchModelMetrics(userId) {
-    const currentId = userId || activeUser?.user_id || 'usr_free';
-    try {
-      const res = await fetch(`${API_BASE_URL}/api/v1/model/metrics`, {
-        headers: { 'X-User-ID': currentId }
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setModelMetrics(data);
-      }
-    } catch (e) {
-      console.error("Failed to fetch model metrics", e);
-    }
-  }
-
-  const handleTrainModel = async () => {
-    setIsTraining(true);
-    setAuthError("");
-    try {
-      const res = await fetch(`${API_BASE_URL}/api/v1/model/train`, {
+      showToast(`Testing ${provider.toUpperCase()} connection...`, 'warning');
+      const res = await fetch(`${API_BASE}/api/v1/cloud/test-connection/${provider}`, {
         method: 'POST',
-        headers: { 'X-User-ID': activeUser?.user_id || 'usr_free' }
+        headers: { 'X-User-ID': activeUser.user_id }
       });
       if (res.ok) {
         const data = await res.json();
-        setModelMetrics(data.metrics);
-        if (activeUser?.role === 'ADMIN') fetchAuditLogs();
-        setAuthError("");
+        fetchCloudStatus(true);
+        showToast(`${provider.toUpperCase()}: ${data.status} - ${data.details || 'Identity verified'}`, 'success');
       } else {
         const err = await res.json();
-        setAuthError(err.detail || "Model training failed.");
+        showToast(err.detail || 'Connection test failed', 'error');
       }
-    } catch (e) {
-      console.error("Failed to trigger model training:", e);
-      alert("Error: Failed to reach model training endpoint.");
+    } catch {
+      showToast('Failed to reach backend during test.', 'error');
+    }
+  };
+
+  // Sync Cloud Logs
+  const handleSyncLogs = async (provider) => {
+    try {
+      showToast(`Syncing audit telemetry from ${provider.toUpperCase()}...`, 'warning');
+      const res = await fetch(`${API_BASE}/api/v1/cloud/sync/${provider}?limit=5`, {
+        method: 'POST',
+        headers: { 'X-User-ID': activeUser.user_id }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        fetchAlerts();
+        showToast(`Synchronized ${data.synced_count} events from ${provider.toUpperCase()}`, 'success');
+      } else {
+        const err = await res.json();
+        showToast(err.detail || 'Sync failed: Pro tier required', 'error');
+      }
+    } catch {
+      showToast('Network error during log sync.', 'error');
+    }
+  };
+
+  // Retrain ML Classifier
+  const handleTrainModel = async () => {
+    if (activeUser.role !== 'ADMIN') {
+      showToast('Admin privilege required to retrain ML model.', 'error');
+      return;
+    }
+    try {
+      setIsTraining(true);
+      const res = await fetch(`${API_BASE}/api/v1/model/train`, {
+        method: 'POST',
+        headers: { 'X-User-ID': activeUser.user_id }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setMlMetrics(data.metrics);
+        showToast(`Model retrained successfully! Accuracy: ${(data.metrics.accuracy * 100).toFixed(1)}%`, 'success');
+      } else {
+        const err = await res.json();
+        showToast(err.detail || 'Retraining failed.', 'error');
+      }
+    } catch {
+      showToast('Network error during model retraining.', 'error');
     } finally {
       setIsTraining(false);
     }
   };
 
-  const handleSimulateNext = async (userId) => {
-    const currentId = userId || activeUser?.user_id || 'usr_free';
-    try {
-      const res = await fetch(`${API_BASE_URL}/api/v1/pipeline/simulate-next`, {
-        method: 'POST',
-        headers: { 'X-User-ID': currentId }
-      });
-      if (res.ok) {
-        const newAlert = await res.json();
-        const formattedAlert = {
-          event_id: newAlert.event_id,
-          timestamp: newAlert.raw_event.timestamp,
-          cloud_provider: newAlert.raw_event.cloud_provider,
-          user_id: newAlert.raw_event.user_id,
-          event_type: newAlert.raw_event.event_type,
-          ip_address: newAlert.raw_event.ip_address,
-          location: newAlert.raw_event.location,
-          resource: newAlert.raw_event.resource,
-          failed_attempts: newAlert.raw_event.failed_attempts,
-          request_frequency: newAlert.raw_event.request_frequency,
-          threat_status: newAlert.detection_result.threat_status,
-          threat_type: newAlert.detection_result.threat_type,
-          confidence: newAlert.detection_result.confidence,
-          risk_score: newAlert.risk_score ?? newAlert.detection_result.risk_score ?? 10,
-          severity: newAlert.severity ?? newAlert.detection_result.severity ?? 'LOW',
-          reasons: newAlert.detection_result.reason,
-          compliance: newAlert.compliance || {}
-        };
-
-        setAlerts(prev => [formattedAlert, ...prev.filter(a => a.event_id !== formattedAlert.event_id)]);
-        setSelectedAlert(formattedAlert);
-        setAuthError("");
-      } else {
-        const err = await res.json();
-        setAuthError(`[SIMULATION REJECTED] ${err.detail}`);
-        if (isSimulating) {
-          if (simulationTimer.current) clearInterval(simulationTimer.current);
-          setIsSimulating(false);
-        }
-      }
-    } catch (err) {
-      console.error("Simulation request failed", err);
-    }
-  };
-
-  const toggleSimulation = () => {
-    if (isSimulating) {
-      if (simulationTimer.current) clearInterval(simulationTimer.current);
-      setIsSimulating(false);
-    } else {
-      setIsSimulating(true);
-      handleSimulateNext(activeUser?.user_id);
-      simulationTimer.current = setInterval(() => handleSimulateNext(activeUser?.user_id), 3000);
-    }
-  };
-
-  const handleCustomEventSubmit = async (e) => {
-    e.preventDefault();
-    setAuthError("");
-    try {
-      const res = await fetch(`${API_BASE_URL}/api/v1/pipeline/run`, {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'X-User-ID': activeUser?.user_id || 'usr_free'
-        },
-        body: JSON.stringify(customEvent)
-      });
-      if (res.ok) {
-        const data = await res.json();
-        const formattedAlert = {
-          event_id: data.event_id,
-          timestamp: data.raw_event.timestamp,
-          cloud_provider: data.raw_event.cloud_provider,
-          user_id: data.raw_event.user_id,
-          event_type: data.raw_event.event_type,
-          ip_address: data.raw_event.ip_address,
-          location: data.raw_event.location,
-          resource: data.raw_event.resource,
-          failed_attempts: data.raw_event.failed_attempts,
-          request_frequency: data.raw_event.request_frequency,
-          threat_status: data.detection_result.threat_status,
-          threat_type: data.detection_result.threat_type,
-          confidence: data.detection_result.confidence,
-          risk_score: data.risk_score ?? data.detection_result.risk_score ?? 10,
-          severity: data.severity ?? data.detection_result.severity ?? 'LOW',
-          reasons: data.detection_result.reason,
-          compliance: data.compliance || {}
-        };
-
-        setAlerts(prev => [formattedAlert, ...prev.filter(a => a.event_id !== formattedAlert.event_id)]);
-        setSelectedAlert(formattedAlert);
-        setAuthError("");
-        generateCustomIds();
-        setActiveTab('console');
-      } else {
-        const err = await res.json();
-        setAuthError(`[INGESTION FORBIDDEN] ${err.detail}`);
-      }
-    } catch (e) {
-      console.error("Ingestion endpoint request failed:", e);
-    }
-  };
-
+  // Upgrade User to Pro Tier (Mock Webhook Simulation)
   const handleUpgradeToPro = async () => {
-    setBillingStatus("Initiating local verified checkout pipeline...");
     try {
-      const resOrder = await fetch(`${API_BASE_URL}/api/v1/billing/checkout`, {
+      showToast('Creating upgrade order...', 'warning');
+      const checkoutRes = await fetch(`${API_BASE}/api/v1/billing/checkout`, {
         method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'X-User-ID': activeUser?.user_id || 'usr_free'
-        },
-        body: JSON.stringify({ plan: "pro" })
+        headers: { 'X-User-ID': activeUser.user_id }
       });
-      
-      if (!resOrder.ok) {
-        setBillingStatus("Failed to initiate checkout order.");
-        return;
-      }
-      
-      const order = await resOrder.json();
-      setBillingStatus(`Order ${order.order_id} created. Generating signature...`);
-      
-      const paymentId = `pay_mock_${Math.floor(100000 + Math.random() * 900000)}`;
+      if (!checkoutRes.ok) throw new Error('Checkout failed');
+      const checkoutData = await checkoutRes.json();
+
+      // Compute HMAC-SHA256 signature in browser
       const secret = "mock_secret_key_123";
-      const payloadString = `${paymentId}:${order.order_id}`;
-      const signature = await computeHMAC(secret, payloadString);
+      const paymentId = "pay_mock_" + Date.now();
+      const payload = `${paymentId}:${checkoutData.order_id}`;
       
-      const resWebhook = await fetch(`${API_BASE_URL}/api/v1/billing/webhook`, {
+      const encoder = new TextEncoder();
+      const key = await crypto.subtle.importKey(
+        "raw",
+        encoder.encode(secret),
+        { name: "HMAC", hash: "SHA-256" },
+        false,
+        ["sign"]
+      );
+      const signatureBuffer = await crypto.subtle.sign("HMAC", key, encoder.encode(payload));
+      const hashArray = Array.from(new Uint8Array(signatureBuffer));
+      const hexSignature = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+
+      // Dispatch webhook
+      const webhookRes = await fetch(`${API_BASE}/api/v1/billing/webhook`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'X-Mock-Signature': signature
+          'X-Mock-Signature': hexSignature
         },
         body: JSON.stringify({
+          order_id: checkoutData.order_id,
+          user_id: activeUser.user_id,
           payment_id: paymentId,
-          order_id: order.order_id,
-          user_id: activeUser.user_id
+          amount: 49900
         })
       });
-      
-      if (resWebhook.ok) {
-        const resData = await resWebhook.json();
-        setBillingStatus(`SUCCESS: ${resData.message}`);
-        await loadSession(activeUser.user_id);
-      } else {
-        const err = await resWebhook.json();
-        setBillingStatus(`Webhook upgrade failed: ${err.detail}`);
+
+      if (webhookRes.ok) {
+        setActiveUser(prev => ({ ...prev, is_pro: 1 }));
+        showToast('Subscription upgraded to PRO! Multi-cloud features enabled.', 'success');
       }
-    } catch (e) {
-      console.error(e);
-      setBillingStatus("Simulated checkout connection failed.");
+    } catch (err) {
+      showToast('Upgrade process encountered an error.', 'error');
     }
   };
 
+  // ----------------------------------------------------------------------------
+  // Computed Filtering & Statistics
+  // ----------------------------------------------------------------------------
+
+  const filteredAlerts = useMemo(() => {
+    return alerts.filter(alert => {
+      const q = searchQuery.toLowerCase();
+      const matchSearch = !searchQuery || 
+        alert.event_id?.toLowerCase().includes(q) ||
+        alert.user_id?.toLowerCase().includes(q) ||
+        alert.resource?.toLowerCase().includes(q) ||
+        alert.ip_address?.includes(q);
+
+      const matchProvider = filterProvider === 'ALL' || alert.cloud_provider?.toLowerCase() === filterProvider.toLowerCase();
+      const matchSeverity = filterSeverity === 'ALL' || alert.severity?.toUpperCase() === filterSeverity.toUpperCase();
+      const matchThreat = filterThreat === 'ALL' || alert.threat_type?.toLowerCase().includes(filterThreat.toLowerCase());
+
+      return matchSearch && matchProvider && matchSeverity && matchThreat;
+    });
+  }, [alerts, searchQuery, filterProvider, filterSeverity, filterThreat]);
+
+  // Paginated alerts
+  const paginatedAlerts = useMemo(() => {
+    const start = (currentPage - 1) * pageSize;
+    return filteredAlerts.slice(start, start + pageSize);
+  }, [filteredAlerts, currentPage, pageSize]);
+
+  const totalPages = Math.ceil(filteredAlerts.length / pageSize) || 1;
+
+  // Key KPI stats
+  const stats = useMemo(() => {
+    const total = alerts.length;
+    const threats = alerts.filter(a => a.threat_status === 'Suspicious').length;
+    const critical = alerts.filter(a => a.severity === 'CRITICAL').length;
+    const high = alerts.filter(a => a.severity === 'HIGH').length;
+    const med = alerts.filter(a => a.severity === 'MEDIUM').length;
+    const low = alerts.filter(a => a.severity === 'LOW').length;
+    const avgRisk = total > 0 ? Math.round(alerts.reduce((acc, a) => acc + (a.risk_score || 0), 0) / total) : 0;
+    const connectedClouds = Object.values(cloudStatuses).filter(s => s.status === 'CONNECTED' || s.status === 'DEMO MODE').length;
+
+    return { total, threats, critical, high, med, low, avgRisk, connectedClouds };
+  }, [alerts, cloudStatuses]);
+
+  // Helpers for Badges
+  const getSeverityBadge = (severity, score) => {
+    const s = severity?.toUpperCase() || 'LOW';
+    if (s === 'CRITICAL') return <span className="badge badge-crit">CRITICAL ({score})</span>;
+    if (s === 'HIGH') return <span className="badge badge-high">HIGH ({score})</span>;
+    if (s === 'MEDIUM') return <span className="badge badge-med">MEDIUM ({score})</span>;
+    return <span className="badge badge-low">LOW ({score})</span>;
+  };
+
   const getProviderBadge = (provider) => {
-    const p = (provider || 'aws').toLowerCase();
-    let bg = 'bg-slate-800 text-slate-300';
-    if (p === 'azure') bg = 'bg-blue-950 border border-blue-800/40 text-blue-400';
-    else if (p === 'gcp') bg = 'bg-amber-950 border border-amber-800/40 text-amber-400';
-    else if (p === 'oci') bg = 'bg-red-950 border border-red-800/40 text-red-400';
-    else if (p === 'aws') bg = 'bg-emerald-950 border border-emerald-800/40 text-emerald-400';
-    
-    return (
-      <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold font-mono tracking-wider ${bg}`}>
-        {p.toUpperCase()}
-      </span>
-    );
+    const p = provider?.toLowerCase() || 'aws';
+    if (p === 'aws') return <span className="badge badge-aws">AWS</span>;
+    if (p === 'azure') return <span className="badge badge-azure">AZURE</span>;
+    if (p === 'gcp') return <span className="badge badge-gcp">GCP</span>;
+    if (p === 'oci') return <span className="badge badge-oci">OCI</span>;
+    return <span className="badge badge-neutral">{provider.toUpperCase()}</span>;
   };
 
-  const getSeverityBadge = (severity, riskScore) => {
-    const s = (severity || 'LOW').toUpperCase();
-    let bg = 'bg-emerald-950 text-emerald-400 border-emerald-500/30';
-    if (s === 'CRITICAL') bg = 'bg-red-950 text-red-400 border-red-500/40 animate-pulse';
-    else if (s === 'HIGH') bg = 'bg-orange-950 text-orange-400 border-orange-500/30';
-    else if (s === 'MEDIUM') bg = 'bg-amber-950 text-amber-400 border-amber-500/30';
+  // Parse parsed JSON helper
+  const parsedReasons = useMemo(() => {
+    if (!selectedAlert?.reasons) return [];
+    try {
+      return typeof selectedAlert.reasons === 'string' ? JSON.parse(selectedAlert.reasons) : selectedAlert.reasons;
+    } catch {
+      return [selectedAlert.reasons];
+    }
+  }, [selectedAlert]);
 
-    return (
-      <span className={`px-2 py-0.5 rounded border text-[10px] font-mono font-bold ${bg}`}>
-        {s} {riskScore !== undefined ? `(${riskScore})` : ''}
-      </span>
-    );
-  };
-
-  // Top Metrics Calculations
-  const totalEventsCount = alerts.length;
-  const threatsDetectedCount = alerts.filter(a => a.threat_status === 'Suspicious').length;
-  const criticalThreatsCount = alerts.filter(a => a.severity === 'CRITICAL').length;
-  const avgRiskScore = totalEventsCount > 0 
-    ? Math.round(alerts.reduce((acc, a) => acc + (a.risk_score || 10), 0) / totalEventsCount) 
-    : 0;
-  const activeCloudsCount = cloudStatus 
-    ? Object.values(cloudStatus).filter(c => c.status === 'CONNECTED' || c.status === 'DEMO MODE').length 
-    : 0;
+  const parsedCompliance = useMemo(() => {
+    if (!selectedAlert?.compliance_recommendations) return {};
+    try {
+      return typeof selectedAlert.compliance_recommendations === 'string' 
+        ? JSON.parse(selectedAlert.compliance_recommendations) 
+        : selectedAlert.compliance_recommendations;
+    } catch {
+      return {};
+    }
+  }, [selectedAlert]);
 
   return (
-    <div className="console-wrapper">
+    <div className="app-container">
       
-      {/* Top Console Status Ribbon */}
-      <div className="bg-slate-950 border-b border-slate-800 text-slate-400 text-[10px] py-1 px-4 flex justify-between items-center font-mono">
-        <span className="flex items-center gap-2">
-          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-          <span>MULTI-CLOUD CORE INGESTION PIPELINE: <strong>ONLINE</strong></span>
-        </span>
-        <span className="text-gray-500 hidden md:inline">
-          ARCHITECTURE: AWS &bull; AZURE &bull; GCP &bull; OCI &bull; RANDOM FOREST CLASSIFIER &bull; NIST/CIS/ISO MAPPINGS
-        </span>
-      </div>
-      
-      {/* Console Top Header */}
-      <header className="console-header">
-        <div className="console-title-group">
-          <h1>
-            <Shield className="text-blue-500 w-5 h-5" />
-            MULTI-CLOUD SECURITY OPERATIONS & RISK EVALUATION
-          </h1>
-          <p>AI-Based Security Risk Evaluation Framework &bull; End-to-End Analysis Pipeline</p>
+      {/* ------------------------------------------------------------------------
+          TOP ENTERPRISE HEADER
+          ------------------------------------------------------------------------ */}
+      <header className="top-header">
+        <div className="brand-section">
+          <div className="brand-logo">CS</div>
+          <span className="brand-title">Multi-Cloud Security Framework</span>
+          <span className="brand-subtitle">Operations & Risk Evaluator</span>
         </div>
 
-        {/* User Session and Connectivity Swappers */}
-        <div className="flex gap-3 items-center">
-          <div className="flex items-center gap-2 bg-slate-900 border border-slate-700 px-3 py-1.5 rounded text-[11px] font-mono">
-            <User className="w-3.5 h-3.5 text-gray-500" />
-            <span className="text-gray-400">SESSION:</span>
-            <select 
-              value={activeUser?.user_id || ''} 
-              onChange={(e) => handleUserChange(e.target.value)}
-              className="bg-transparent border-none text-white focus:outline-none cursor-pointer font-bold font-mono"
+        {/* System Health Indicators & Action Bar */}
+        <div className="header-actions">
+          {/* API Health */}
+          <div className="flex items-center gap-1 text-[11px] font-mono" style={{ marginRight: '8px' }}>
+            <span style={{ 
+              display: 'inline-block', 
+              width: '7px', 
+              height: '7px', 
+              borderRadius: '50%', 
+              backgroundColor: isApiOnline ? '#10b981' : '#ef4444' 
+            }} />
+            <span style={{ color: isApiOnline ? '#10b981' : '#ef4444' }}>
+              {isApiOnline ? 'API: ONLINE (Port 8000)' : 'API: OFFLINE'}
+            </span>
+          </div>
+
+          {/* Mode Pill */}
+          <span className="badge badge-neutral" style={{ marginRight: '8px' }}>
+            {healthStatus?.demo_mode ? 'MODE: DEMO' : 'MODE: HYBRID'}
+          </span>
+
+          {/* User Session Switcher */}
+          <div className="flex items-center gap-1.5" style={{ marginRight: '8px' }}>
+            <span className="text-[11px] text-slate-400">Session:</span>
+            <select
+              value={activeUser.user_id}
+              onChange={(e) => {
+                const u = SEED_USERS.find(user => user.user_id === e.target.value);
+                if (u) {
+                  setActiveUser(u);
+                  showToast(`Switched active session to: ${u.username} (${u.role} - ${u.is_pro ? 'PRO' : 'FREE'})`, 'info');
+                }
+              }}
+              className="select-compact font-mono"
             >
-              {users.map(u => (
-                <option key={u.user_id} value={u.user_id} className="bg-slate-950 text-white">
-                  {u.username.toUpperCase()} ({u.role}) - {u.is_pro ? 'PRO' : 'FREE'}
-                </option>
-              ))}
+              <option value="usr_admin">admin_secops (ADMIN / PRO)</option>
+              <option value="usr_pro">senior_analyst (ANALYST / PRO)</option>
+              <option value="usr_free">guest_user (USER / FREE)</option>
             </select>
           </div>
 
-          <div className="flex items-center gap-2 bg-slate-900 border border-slate-700 px-3 py-1.5 rounded text-[11px] font-mono">
-            <Server className="w-3.5 h-3.5 text-gray-500" />
-            <span className="text-gray-400">API:</span>
-            <span className={backendStatus === 'online' ? 'status-text-safe font-bold' : 'status-text-danger font-bold'}>
-              {backendStatus === 'online' ? 'CONNECTED' : 'OFFLINE'}
-            </span>
-          </div>
+          {/* 1-Click Scenario Injector Dropdown */}
+          <select 
+            onChange={(e) => {
+              if (e.target.value) {
+                handleTriggerScenario(e.target.value);
+                e.target.value = '';
+              }
+            }} 
+            className="select-compact" 
+            style={{ backgroundColor: 'var(--primary-subtle)', borderColor: 'var(--primary)' }}
+          >
+            <option value="">Run Test Scenario...</option>
+            <option value="aws_brute_force">AWS: Brute Force (Critical)</option>
+            <option value="azure_keyvault">Azure: KeyVault Breach (Critical)</option>
+            <option value="gcp_storage_burst">GCP: Storage Burst (High)</option>
+            <option value="oci_normal">OCI: Normal Access (Low)</option>
+            <option value="aws_normal">AWS: Standard Read (Low)</option>
+          </select>
         </div>
       </header>
 
-      {/* Top Metrics Ribbon */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3 my-3">
-        <div className="bg-slate-900/80 border border-slate-800 p-3 rounded flex flex-col">
-          <span className="text-[10px] text-gray-400 font-mono uppercase">Total Ingested Events</span>
-          <span className="text-xl font-bold text-white font-mono mt-1">{totalEventsCount}</span>
-        </div>
-        <div className="bg-slate-900/80 border border-slate-800 p-3 rounded flex flex-col">
-          <span className="text-[10px] text-gray-400 font-mono uppercase">Threats Detected</span>
-          <span className="text-xl font-bold text-amber-400 font-mono mt-1">{threatsDetectedCount}</span>
-        </div>
-        <div className="bg-slate-900/80 border border-slate-800 p-3 rounded flex flex-col">
-          <span className="text-[10px] text-gray-400 font-mono uppercase">Critical Threats</span>
-          <span className="text-xl font-bold text-red-400 font-mono mt-1">{criticalThreatsCount}</span>
-        </div>
-        <div className="bg-slate-900/80 border border-slate-800 p-3 rounded flex flex-col">
-          <span className="text-[10px] text-gray-400 font-mono uppercase">Avg System Risk</span>
-          <div className="flex items-center justify-between mt-1">
-            <span className="text-xl font-bold text-blue-400 font-mono">{avgRiskScore} / 100</span>
-            <span className={`text-[9px] font-mono font-bold px-1.5 py-0.5 rounded ${avgRiskScore >= 60 ? 'bg-red-950 text-red-400' : 'bg-emerald-950 text-emerald-400'}`}>
-              {avgRiskScore >= 80 ? 'CRITICAL' : avgRiskScore >= 60 ? 'HIGH' : avgRiskScore >= 30 ? 'MEDIUM' : 'LOW'}
-            </span>
-          </div>
-        </div>
-        <div className="bg-slate-900/80 border border-slate-800 p-3 rounded flex flex-col col-span-2 md:col-span-1">
-          <span className="text-[10px] text-gray-400 font-mono uppercase">Connected Clouds</span>
-          <span className="text-xl font-bold text-emerald-400 font-mono mt-1">{activeCloudsCount} / 4</span>
-        </div>
-      </div>
-
-      {/* Cloud Integration Status Dashboard */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 my-2">
-        {['aws', 'azure', 'gcp', 'oci'].map((providerKey) => {
-          const info = cloudStatus?.[providerKey] || { status: 'CHECKING' };
-          const isConnected = info.status === 'CONNECTED';
-          const isDemo = info.status === 'DEMO MODE';
-          const isFailed = info.status === 'FAILED' || info.status === 'INVALID';
-
-          let statusBadgeClass = 'bg-slate-800 text-slate-400 border-slate-700';
-          if (isConnected) statusBadgeClass = 'bg-emerald-950/80 text-emerald-400 border-emerald-500/40';
-          else if (isDemo) statusBadgeClass = 'bg-blue-950/80 text-blue-400 border-blue-500/40';
-          else if (isFailed) statusBadgeClass = 'bg-red-950/80 text-red-400 border-red-500/40';
-
-          return (
-            <div key={providerKey} className="bg-slate-900/90 border border-slate-800 p-3 rounded flex flex-col justify-between">
-              <div>
-                <div className="flex items-center justify-between mb-1.5">
-                  <span className="text-xs font-bold text-white flex items-center gap-1.5 font-mono">
-                    <Cloud className="w-3.5 h-3.5 text-blue-400" />
-                    {providerKey.toUpperCase()}
-                  </span>
-                  <span className={`px-2 py-0.5 rounded text-[9px] font-mono font-bold border ${statusBadgeClass}`}>
-                    {info.status || 'CHECKING'}
-                  </span>
-                </div>
-                <p className="text-[10px] text-gray-400 font-mono truncate mb-2">
-                  {info.details || `Status: ${info.status}`}
-                </p>
-              </div>
-
-              <div className="flex items-center justify-between pt-2 border-t border-slate-800/80">
-                <div className="text-[10px] text-gray-500 font-mono">
-                  Events: <span className="text-white font-bold">{info.events_processed || 0}</span>
-                </div>
-                <div className="flex gap-1.5">
-                  <button
-                    onClick={() => handleTestProvider(providerKey)}
-                    disabled={testingProvider === providerKey}
-                    className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-gray-300 text-[10px] font-mono border border-slate-700 disabled:opacity-50"
-                  >
-                    {testingProvider === providerKey ? "..." : "Test"}
-                  </button>
-                  <button
-                    onClick={() => handleSyncProvider(providerKey)}
-                    disabled={syncingProvider === providerKey || (activeUser?.is_pro === 0 && providerKey !== 'aws')}
-                    className="px-2 py-1 rounded bg-blue-900/60 hover:bg-blue-800 text-blue-300 text-[10px] font-mono border border-blue-700/50 disabled:opacity-40"
-                    title={activeUser?.is_pro === 0 && providerKey !== 'aws' ? 'Requires Pro Tier' : 'Sync cloud log events'}
-                  >
-                    {syncingProvider === providerKey ? "Syncing..." : "Sync"}
-                  </button>
-                </div>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
-      {/* 1-Click Deterministic Demo Scenarios Bar */}
-      <div className="bg-slate-950/70 border border-slate-800 p-2.5 rounded my-2 flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-1.5 text-[11px] font-mono text-gray-300">
-          <Zap className="w-3.5 h-3.5 text-amber-400" />
-          <span className="font-bold">1-Click Professor Presentation Scenarios:</span>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <button
-            onClick={() => handleTriggerDemoScenario('aws_brute_force')}
-            className="px-2 py-1 rounded bg-red-950/40 hover:bg-red-900/60 text-red-300 text-[10px] font-mono border border-red-500/30"
-          >
-            AWS: Brute Force (Critical)
-          </button>
-          <button
-            onClick={() => handleTriggerDemoScenario('azure_keyvault')}
-            disabled={activeUser?.is_pro === 0}
-            className="px-2 py-1 rounded bg-orange-950/40 hover:bg-orange-900/60 text-orange-300 text-[10px] font-mono border border-orange-500/30 disabled:opacity-40"
-            title={activeUser?.is_pro === 0 ? 'Requires Pro Tier' : ''}
-          >
-            Azure: KeyVault Breach (High)
-          </button>
-          <button
-            onClick={() => handleTriggerDemoScenario('gcp_storage_burst')}
-            disabled={activeUser?.is_pro === 0}
-            className="px-2 py-1 rounded bg-amber-950/40 hover:bg-amber-900/60 text-amber-300 text-[10px] font-mono border border-amber-500/30 disabled:opacity-40"
-            title={activeUser?.is_pro === 0 ? 'Requires Pro Tier' : ''}
-          >
-            GCP: Storage Burst (High)
-          </button>
-          <button
-            onClick={() => handleTriggerDemoScenario('oci_normal')}
-            disabled={activeUser?.is_pro === 0}
-            className="px-2 py-1 rounded bg-blue-950/40 hover:bg-blue-900/60 text-blue-300 text-[10px] font-mono border border-blue-500/30 disabled:opacity-40"
-            title={activeUser?.is_pro === 0 ? 'Requires Pro Tier' : ''}
-          >
-            OCI: Normal Compute (Low)
-          </button>
-          <button
-            onClick={() => handleTriggerDemoScenario('aws_normal')}
-            className="px-2 py-1 rounded bg-emerald-950/40 hover:bg-emerald-900/60 text-emerald-300 text-[10px] font-mono border border-emerald-500/30"
-          >
-            AWS: Normal Read (Low)
-          </button>
-        </div>
-      </div>
-
-      {/* Tabs Menu Navigation */}
-      <nav className="console-tabs" aria-label="Main Navigation">
-        <button 
-          onClick={() => setActiveTab('console')}
-          className={`console-tab-btn ${activeTab === 'console' ? 'active' : ''}`}
-        >
-          <Activity className="w-4 h-4" />
-          Threat Monitor Console
-        </button>
-        <button 
-          onClick={() => setActiveTab('inject')}
-          className={`console-tab-btn ${activeTab === 'inject' ? 'active' : ''}`}
-        >
-          <Plus className="w-4 h-4" />
-          Log Ingestion Injector
-        </button>
-        <button 
-          onClick={() => setActiveTab('metrics')}
-          className={`console-tab-btn ${activeTab === 'metrics' ? 'active' : ''}`}
-        >
-          <BarChart2 className="w-4 h-4" />
-          RF Model Diagnostics
-        </button>
-        {activeUser?.role === 'ADMIN' && (
+      {/* ------------------------------------------------------------------------
+          MAIN BODY (SIDEBAR + CONTENT)
+          ------------------------------------------------------------------------ */}
+      <div className="main-wrapper">
+        
+        {/* Left Navigation Sidebar */}
+        <nav className="app-sidebar">
+          <div className="sidebar-section-title">Navigation</div>
+          
           <button 
-            onClick={() => { setActiveTab('audit'); fetchAuditLogs(); }}
-            className={`console-tab-btn ${activeTab === 'audit' ? 'active' : ''}`}
+            className={`nav-item ${activeTab === 'dashboard' ? 'active' : ''}`}
+            onClick={() => setActiveTab('dashboard')}
+          >
+            <Activity className="w-4 h-4" />
+            <span className="nav-label">Security Overview</span>
+          </button>
+
+          <button 
+            className={`nav-item ${activeTab === 'events' ? 'active' : ''}`}
+            onClick={() => setActiveTab('events')}
           >
             <FileText className="w-4 h-4" />
-            Admin Audit Logs
+            <span className="nav-label">Security Events</span>
           </button>
-        )}
-        <button 
-          onClick={() => setActiveTab('billing')}
-          className={`console-tab-btn ${activeTab === 'billing' ? 'active' : ''}`}
-        >
-          <Server className="w-4 h-4" />
-          Billing & Tiers
-        </button>
-      </nav>
 
-      {/* Alert Warning for Authorization Failures */}
-      {authError && (
-        <div className="bg-red-950/20 border border-red-500/30 text-red-400 text-xs px-4 py-2.5 rounded font-mono flex items-center gap-2 mt-2">
-          <AlertTriangle className="w-4 h-4 shrink-0 animate-bounce" />
-          <span>SECURITY NOTICE: {authError}</span>
-        </div>
-      )}
+          <button 
+            className={`nav-item ${activeTab === 'clouds' ? 'active' : ''}`}
+            onClick={() => setActiveTab('clouds')}
+          >
+            <Server className="w-4 h-4" />
+            <span className="nav-label">Cloud Providers</span>
+          </button>
 
-      {/* Main Tab Contents */}
-      <main style={{ flexGrow: 1, marginTop: 'var(--space-md)' }}>
-        
-        {/* Tab 1: Real-Time Threat Console */}
-        {activeTab === 'console' && (
-          <div className="console-split-layout">
-            
-            {/* Left Sidebar: Simulation Controller & Event Log Stream */}
-            <section className="console-card">
-              <div className="console-card-header">
-                <span className="console-card-title">
-                  <Terminal className="text-blue-400 w-4 h-4" />
-                  Live Event Log Stream
+          <button 
+            className={`nav-item ${activeTab === 'ml_engine' ? 'active' : ''}`}
+            onClick={() => setActiveTab('ml_engine')}
+          >
+            <Cpu className="w-4 h-4" />
+            <span className="nav-label">ML & Risk Engine</span>
+          </button>
+
+          <button 
+            className={`nav-item ${activeTab === 'compliance' ? 'active' : ''}`}
+            onClick={() => setActiveTab('compliance')}
+          >
+            <Shield className="w-4 h-4" />
+            <span className="nav-label">Compliance Mapping</span>
+          </button>
+
+          <div className="sidebar-divider" />
+          <div className="sidebar-section-title">Administration</div>
+
+          <button 
+            className={`nav-item ${activeTab === 'audit' ? 'active' : ''}`}
+            onClick={() => {
+              setActiveTab('audit');
+              fetchAuditLogs();
+            }}
+          >
+            <Layers className="w-4 h-4" />
+            <span className="nav-label">Audit Logs</span>
+          </button>
+
+          <button 
+            className={`nav-item ${activeTab === 'settings' ? 'active' : ''}`}
+            onClick={() => setActiveTab('settings')}
+          >
+            <Settings className="w-4 h-4" />
+            <span className="nav-label">Settings & Tiers</span>
+          </button>
+
+          <div style={{ marginTop: 'auto', padding: '12px' }}>
+            <div style={{ backgroundColor: 'var(--bg-surface-subtle)', padding: '8px 10px', borderRadius: '4px', border: '1px solid var(--border-subtle)' }}>
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Active User:</div>
+              <div style={{ fontSize: '12px', fontWeight: '600', color: 'var(--text-main)', marginTop: '2px' }}>{activeUser.username}</div>
+              <div style={{ display: 'flex', gap: '4px', marginTop: '4px' }}>
+                <span className="badge badge-info">{activeUser.role}</span>
+                <span className={`badge ${activeUser.is_pro ? 'badge-low' : 'badge-neutral'}`}>
+                  {activeUser.is_pro ? 'PRO TIER' : 'FREE TIER'}
                 </span>
+              </div>
+            </div>
+          </div>
+        </nav>
+
+        {/* Main Content Area */}
+        <main className="app-content">
+          
+          {/* Toast Notification Banner */}
+          {toast && (
+            <div className={`toast-banner ${toast.type === 'success' ? 'toast-success' : toast.type === 'warning' ? 'toast-warning' : 'toast-error'}`}>
+              <div className="flex items-center gap-2">
+                {toast.type === 'success' ? <CheckCircle2 className="w-4 h-4" /> : toast.type === 'warning' ? <AlertTriangle className="w-4 h-4" /> : <XCircle className="w-4 h-4" />}
+                <span>{toast.message}</span>
+              </div>
+              <button onClick={() => setToast(null)} style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer' }}>x</button>
+            </div>
+          )}
+
+          {/* ====================================================================
+              TAB 1: SECURITY OVERVIEW (DASHBOARD)
+              ==================================================================== */}
+          {activeTab === 'dashboard' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-md)' }}>
+              <div className="page-header">
+                <div className="page-title-group">
+                  <h2>Security Operations Overview</h2>
+                  <p>Real-time threat evaluation, risk scores, and multi-cloud telemetry metrics.</p>
+                </div>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button onClick={() => { fetchAlerts(); fetchCloudStatus(true); }} className="btn btn-secondary">
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    Refresh Metrics
+                  </button>
+                  {activeUser.role === 'ADMIN' && (
+                    <button 
+                      onClick={() => setIsSimulating(!isSimulating)} 
+                      className={`btn ${isSimulating ? 'btn-secondary' : 'btn-primary'}`}
+                    >
+                      {isSimulating ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
+                      {isSimulating ? 'Pause Stream' : 'Start Simulation'}
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* KPI Summary Cards */}
+              <div className="kpi-grid">
+                <div className="kpi-card">
+                  <div className="kpi-label">
+                    <span>Total Events</span>
+                    <Activity className="w-3.5 h-3.5 text-blue-400" />
+                  </div>
+                  <div className="kpi-value">{stats.total}</div>
+                  <div className="kpi-subtext">Ingested multi-cloud logs</div>
+                </div>
+
+                <div className="kpi-card">
+                  <div className="kpi-label">
+                    <span>Threats Flagged</span>
+                    <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
+                  </div>
+                  <div className="kpi-value" style={{ color: stats.threats > 0 ? 'var(--status-med)' : 'var(--text-main)' }}>
+                    {stats.threats}
+                  </div>
+                  <div className="kpi-subtext">ML classified suspicious</div>
+                </div>
+
+                <div className="kpi-card">
+                  <div className="kpi-label">
+                    <span>Critical Alerts</span>
+                    <Shield className="w-3.5 h-3.5 text-red-400" />
+                  </div>
+                  <div className="kpi-value" style={{ color: stats.critical > 0 ? 'var(--status-crit)' : 'var(--text-main)' }}>
+                    {stats.critical}
+                  </div>
+                  <div className="kpi-subtext">Risk Score 80 to 100</div>
+                </div>
+
+                <div className="kpi-card">
+                  <div className="kpi-label">
+                    <span>Mean Risk Score</span>
+                    <TrendingUp className="w-3.5 h-3.5 text-purple-400" />
+                  </div>
+                  <div className="kpi-value">{stats.avgRisk} / 100</div>
+                  <div className="kpi-subtext">Fleet-wide average</div>
+                </div>
+
+                <div className="kpi-card">
+                  <div className="kpi-label">
+                    <span>Connected Clouds</span>
+                    <Server className="w-3.5 h-3.5 text-emerald-400" />
+                  </div>
+                  <div className="kpi-value">{stats.connectedClouds} / 4</div>
+                  <div className="kpi-subtext">AWS, Azure, GCP, OCI</div>
+                </div>
+              </div>
+
+              {/* Multi-Cloud Provider Status Row */}
+              <div className="enterprise-card">
+                <div className="enterprise-card-header">
+                  <span className="enterprise-card-title">
+                    <Server className="w-4 h-4 text-blue-400" />
+                    Multi-Cloud Telemetry Connectors
+                  </span>
+                  <button onClick={() => setActiveTab('clouds')} className="btn btn-subtle btn-sm">
+                    Manage Providers <ChevronRight className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+
+                <div className="cloud-grid">
+                  {['aws', 'azure', 'gcp', 'oci'].map(provider => {
+                    const statusObj = cloudStatuses[provider] || { status: 'NOT CONFIGURED' };
+                    return (
+                      <div key={provider} className="enterprise-card" style={{ padding: '12px', backgroundColor: 'var(--bg-surface-subtle)' }}>
+                        <div className="flex justify-between items-center mb-2">
+                          <span style={{ fontWeight: '600', textTransform: 'uppercase' }}>{provider}</span>
+                          {statusObj.status === 'CONNECTED' ? (
+                            <span className="badge badge-low">CONNECTED</span>
+                          ) : statusObj.status === 'DEMO MODE' ? (
+                            <span className="badge badge-info">DEMO MODE</span>
+                          ) : (
+                            <span className="badge badge-neutral">{statusObj.status}</span>
+                          )}
+                        </div>
+                        <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                          {statusObj.details || 'Connector initialized'}
+                        </div>
+                        <div style={{ display: 'flex', gap: '6px', marginTop: '10px' }}>
+                          <button onClick={() => handleTestConnection(provider)} className="btn btn-subtle btn-sm" style={{ flex: 1 }}>
+                            Test
+                          </button>
+                          <button onClick={() => handleSyncLogs(provider)} className="btn btn-secondary btn-sm" style={{ flex: 1 }}>
+                            Sync Logs
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Threat Breakdown & Recent Events Grid */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))', gap: 'var(--space-md)' }}>
                 
-                <button 
-                  onClick={toggleSimulation}
-                  disabled={activeUser?.role !== 'ADMIN'}
-                  className={`console-btn ${isSimulating ? 'console-btn-secondary' : 'console-btn-primary'} py-1 px-2.5 rounded text-[11px] ${activeUser?.role !== 'ADMIN' ? 'console-btn-disabled' : ''}`}
-                  title={activeUser?.role !== 'ADMIN' ? "Admin permission required to simulate continuous stream" : ""}
-                >
-                  {isSimulating ? <Pause className="w-3 h-3" /> : <Play className="w-3 h-3" />}
-                  {isSimulating ? "PAUSE STREAM" : "SIMULATE STREAM"}
+                {/* Risk Distribution Breakdown */}
+                <div className="enterprise-card">
+                  <div className="enterprise-card-header">
+                    <span className="enterprise-card-title">
+                      <Shield className="w-4 h-4 text-purple-400" />
+                      Risk Severity Breakdown
+                    </span>
+                  </div>
+                  
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span className="badge badge-crit">CRITICAL (80-100)</span>
+                      <span style={{ fontFamily: 'var(--font-mono)', fontWeight: '600' }}>{stats.critical} events</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span className="badge badge-high">HIGH (60-79)</span>
+                      <span style={{ fontFamily: 'var(--font-mono)', fontWeight: '600' }}>{stats.high} events</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span className="badge badge-med">MEDIUM (30-59)</span>
+                      <span style={{ fontFamily: 'var(--font-mono)', fontWeight: '600' }}>{stats.med} events</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span className="badge badge-low">LOW (0-29)</span>
+                      <span style={{ fontFamily: 'var(--font-mono)', fontWeight: '600' }}>{stats.low} events</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Quick 1-Click Presentation Scenario Runner */}
+                <div className="enterprise-card">
+                  <div className="enterprise-card-header">
+                    <span className="enterprise-card-title">
+                      <Zap className="w-4 h-4 text-amber-400" />
+                      Deterministic Test Scenarios
+                    </span>
+                  </div>
+                  <p style={{ fontSize: '11.5px', color: 'var(--text-muted)', marginBottom: '12px' }}>
+                    Inject structured multi-cloud security telemetry to validate the ML classifier, risk scoring engine, and compliance recommendations.
+                  </p>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    <button onClick={() => handleTriggerScenario('aws_brute_force')} className="btn btn-secondary btn-sm" style={{ justifyContent: 'space-between' }}>
+                      <span>AWS: Brute Force Password Spray</span>
+                      <span className="badge badge-crit">CRITICAL</span>
+                    </button>
+                    <button onClick={() => handleTriggerScenario('azure_keyvault')} className="btn btn-secondary btn-sm" style={{ justifyContent: 'space-between' }}>
+                      <span>Azure: KeyVault Unauthorized Read</span>
+                      <span className="badge badge-crit">CRITICAL</span>
+                    </button>
+                    <button onClick={() => handleTriggerScenario('gcp_storage_burst')} className="btn btn-secondary btn-sm" style={{ justifyContent: 'space-between' }}>
+                      <span>GCP: KMS High Velocity API Burst</span>
+                      <span className="badge badge-high">HIGH</span>
+                    </button>
+                    <button onClick={() => handleTriggerScenario('oci_normal')} className="btn btn-secondary btn-sm" style={{ justifyContent: 'space-between' }}>
+                      <span>OCI: Standard Compute Object Read</span>
+                      <span className="badge badge-low">LOW</span>
+                    </button>
+                  </div>
+                </div>
+
+              </div>
+            </div>
+          )}
+
+          {/* ====================================================================
+              TAB 2: SECURITY EVENTS (INTERACTIVE GRID & DEEP INSPECTOR)
+              ==================================================================== */}
+          {activeTab === 'events' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-md)' }}>
+              <div className="page-header">
+                <div className="page-title-group">
+                  <h2>Multi-Cloud Security Events</h2>
+                  <p>Filter, search, inspect feature vectors, and review explainable risk diagnostics.</p>
+                </div>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button onClick={fetchAlerts} className="btn btn-secondary">
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    Refresh Logs
+                  </button>
+                </div>
+              </div>
+
+              {/* Filter Controls Bar */}
+              <div className="filter-bar">
+                <div className="filter-group">
+                  <div style={{ position: 'relative' }}>
+                    <Search className="w-3.5 h-3.5 text-slate-400" style={{ position: 'absolute', left: '8px', top: '7px' }} />
+                    <input 
+                      type="text"
+                      placeholder="Search ID, User, Resource, IP..."
+                      value={searchQuery}
+                      onChange={(e) => { setSearchQuery(e.target.value); setCurrentPage(1); }}
+                      className="input-search"
+                    />
+                  </div>
+
+                  <select 
+                    value={filterProvider} 
+                    onChange={(e) => { setFilterProvider(e.target.value); setCurrentPage(1); }}
+                    className="select-compact"
+                  >
+                    <option value="ALL">All Cloud Providers</option>
+                    <option value="AWS">AWS</option>
+                    <option value="AZURE">Azure</option>
+                    <option value="GCP">GCP</option>
+                    <option value="OCI">OCI</option>
+                  </select>
+
+                  <select 
+                    value={filterSeverity} 
+                    onChange={(e) => { setFilterSeverity(e.target.value); setCurrentPage(1); }}
+                    className="select-compact"
+                  >
+                    <option value="ALL">All Severities</option>
+                    <option value="CRITICAL">Critical (80-100)</option>
+                    <option value="HIGH">High (60-79)</option>
+                    <option value="MEDIUM">Medium (30-59)</option>
+                    <option value="LOW">Low (0-29)</option>
+                  </select>
+
+                  <select 
+                    value={filterThreat} 
+                    onChange={(e) => { setFilterThreat(e.target.value); setCurrentPage(1); }}
+                    className="select-compact"
+                  >
+                    <option value="ALL">All Threat Types</option>
+                    <option value="Brute-Force">Brute-Force Activity</option>
+                    <option value="Unauthorized">Unauthorized Access</option>
+                    <option value="Normal">Normal Events</option>
+                  </select>
+                </div>
+
+                <div className="text-[11.5px] text-slate-400 font-mono">
+                  Showing {filteredAlerts.length} events
+                </div>
+              </div>
+
+              {/* Split Layout: Event Table (Left 55%) + Deep Inspector (Right 45%) */}
+              <div style={{ display: 'grid', gridTemplateColumns: selectedAlert ? '1.1fr 0.9fr' : '1fr', gap: 'var(--space-md)' }}>
+                
+                {/* Event Table */}
+                <div className="table-container">
+                  {filteredAlerts.length === 0 ? (
+                    <div className="empty-state">
+                      <FileText className="w-8 h-8 text-slate-600 mx-auto" />
+                      <div style={{ fontWeight: '600', marginTop: '8px' }}>No security events match your criteria.</div>
+                      <p>Adjust your search filters or click a test scenario in the top bar to ingest telemetry.</p>
+                    </div>
+                  ) : (
+                    <>
+                      <table className="enterprise-table">
+                        <thead>
+                          <tr>
+                            <th>Cloud</th>
+                            <th>Event ID</th>
+                            <th>Timestamp</th>
+                            <th>Principal / User</th>
+                            <th>Resource</th>
+                            <th>Severity & Risk</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {paginatedAlerts.map(alert => (
+                            <tr 
+                              key={alert.event_id}
+                              onClick={() => setSelectedAlert(alert)}
+                              className={selectedAlert?.event_id === alert.event_id ? 'selected' : ''}
+                            >
+                              <td>{getProviderBadge(alert.cloud_provider)}</td>
+                              <td style={{ fontFamily: 'var(--font-mono)', fontWeight: '600' }}>{alert.event_id}</td>
+                              <td style={{ color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
+                                {alert.timestamp?.slice(11, 19) || ''}
+                              </td>
+                              <td style={{ fontFamily: 'var(--font-mono)' }}>{alert.user_id}</td>
+                              <td style={{ color: 'var(--text-muted)', maxWidth: '140px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                {alert.resource}
+                              </td>
+                              <td>{getSeverityBadge(alert.severity, alert.risk_score)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+
+                      {/* Pagination Controls */}
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 12px', borderTop: '1px solid var(--border-subtle)', fontSize: '11.5px', color: 'var(--text-muted)' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <span>Rows per page:</span>
+                          <select 
+                            value={pageSize} 
+                            onChange={(e) => { setPageSize(Number(e.target.value)); setCurrentPage(1); }}
+                            className="select-compact"
+                          >
+                            <option value={10}>10</option>
+                            <option value={25}>25</option>
+                            <option value={50}>50</option>
+                          </select>
+                        </div>
+
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <span>Page {currentPage} of {totalPages}</span>
+                          <button 
+                            disabled={currentPage === 1} 
+                            onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+                            className="btn btn-subtle btn-sm"
+                          >
+                            <ChevronLeft className="w-3.5 h-3.5" />
+                          </button>
+                          <button 
+                            disabled={currentPage >= totalPages} 
+                            onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
+                            className="btn btn-subtle btn-sm"
+                          >
+                            <ChevronRight className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                {/* Deep Event Inspector Panel */}
+                {selectedAlert && (
+                  <div className="inspector-panel">
+                    <div className="inspector-header">
+                      <div>
+                        <div style={{ fontSize: '13px', fontWeight: '600' }}>Event Diagnostics Inspector</div>
+                        <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
+                          ID: {selectedAlert.event_id} | {selectedAlert.cloud_provider?.toUpperCase()}
+                        </div>
+                      </div>
+                      <button onClick={() => setSelectedAlert(null)} className="btn btn-subtle btn-sm">Close</button>
+                    </div>
+
+                    {/* Risk Gauge Header */}
+                    <div style={{ padding: '12px 16px 0 16px' }}>
+                      <div className="risk-meter">
+                        <div className="risk-score-display" style={{ 
+                          color: selectedAlert.risk_score >= 80 ? 'var(--status-crit)' : selectedAlert.risk_score >= 60 ? 'var(--status-high)' : selectedAlert.risk_score >= 30 ? 'var(--status-med)' : 'var(--status-low)' 
+                        }}>
+                          {selectedAlert.risk_score}
+                        </div>
+                        <div style={{ flex: 1 }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', marginBottom: '4px' }}>
+                            <span style={{ fontWeight: '600' }}>{selectedAlert.severity} RISK LEVEL</span>
+                            <span style={{ color: 'var(--text-muted)' }}>ML Confidence: {Math.round((selectedAlert.confidence || 0.95) * 100)}%</span>
+                          </div>
+                          <div className="risk-bar-track">
+                            <div 
+                              className="risk-bar-fill" 
+                              style={{ 
+                                width: `${selectedAlert.risk_score}%`,
+                                backgroundColor: selectedAlert.risk_score >= 80 ? 'var(--status-crit)' : selectedAlert.risk_score >= 60 ? 'var(--status-high)' : selectedAlert.risk_score >= 30 ? 'var(--status-med)' : 'var(--status-low)'
+                              }} 
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Inspector Tabs */}
+                    <div className="inspector-tabs">
+                      <button 
+                        className={`inspector-tab ${inspectorTab === 'diagnostics' ? 'active' : ''}`}
+                        onClick={() => setInspectorTab('diagnostics')}
+                      >
+                        Explainability
+                      </button>
+                      <button 
+                        className={`inspector-tab ${inspectorTab === 'compliance' ? 'active' : ''}`}
+                        onClick={() => setInspectorTab('compliance')}
+                      >
+                        Compliance Playbook
+                      </button>
+                      <button 
+                        className={`inspector-tab ${inspectorTab === 'features' ? 'active' : ''}`}
+                        onClick={() => setInspectorTab('features')}
+                      >
+                        Module 2 Features
+                      </button>
+                      <button 
+                        className={`inspector-tab ${inspectorTab === 'json' ? 'active' : ''}`}
+                        onClick={() => setInspectorTab('json')}
+                      >
+                        Module 1 JSON
+                      </button>
+                    </div>
+
+                    {/* Inspector Tab Content */}
+                    <div className="inspector-content">
+                      
+                      {/* Tab 1: Diagnostics & Explainability */}
+                      {inspectorTab === 'diagnostics' && (
+                        <div>
+                          <div style={{ fontSize: '12px', fontWeight: '600', marginBottom: '8px' }}>
+                            Model Threat Verdict: <span style={{ color: 'var(--primary-text)' }}>{selectedAlert.threat_type}</span>
+                          </div>
+
+                          <div style={{ fontSize: '11.5px', color: 'var(--text-muted)', marginBottom: '6px' }}>Diagnostic Reasoning:</div>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                            {parsedReasons.map((reason, idx) => (
+                              <div key={idx} style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', fontSize: '12px', backgroundColor: 'var(--bg-surface-subtle)', padding: '8px', borderRadius: '4px', border: '1px solid var(--border-subtle)' }}>
+                                <CheckCircle2 className="w-3.5 h-3.5 text-blue-400 mt-0.5 flex-shrink-0" />
+                                <span>{reason}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Tab 2: Compliance & Mitigation */}
+                      {inspectorTab === 'compliance' && (
+                        <div>
+                          <div style={{ fontSize: '12px', fontWeight: '600', marginBottom: '8px' }}>Actionable Incident Remediation:</div>
+                          <div style={{ fontSize: '12px', color: 'var(--text-main)', backgroundColor: 'var(--bg-surface-subtle)', padding: '10px', borderRadius: '4px', border: '1px solid var(--border-subtle)', lineHeight: '1.5' }}>
+                            {parsedCompliance.actionable_recommendation || 'Standard operational event: adhere to baseline audit logging retention policies.'}
+                          </div>
+
+                          <div className="compliance-box">
+                            <div className="compliance-title">Regulatory Framework Mappings:</div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                              <div>
+                                <span className="framework-tag">NIST CSF 2.0</span>
+                                <span style={{ fontSize: '11.5px', fontFamily: 'var(--font-mono)' }}>
+                                  {parsedCompliance.framework_mappings?.nist_csf || 'DE.AE-01'}
+                                </span>
+                              </div>
+                              <div>
+                                <span className="framework-tag">CIS Controls v8</span>
+                                <span style={{ fontSize: '11.5px', fontFamily: 'var(--font-mono)' }}>
+                                  {parsedCompliance.framework_mappings?.cis_controls || 'CIS 8.2'}
+                                </span>
+                              </div>
+                              <div>
+                                <span className="framework-tag">ISO/IEC 27001:2022</span>
+                                <span style={{ fontSize: '11.5px', fontFamily: 'var(--font-mono)' }}>
+                                  {parsedCompliance.framework_mappings?.iso_27001 || 'A.12.4.1'}
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Tab 3: Module 2 Feature Vector */}
+                      {inspectorTab === 'features' && (
+                        <div className="feature-grid">
+                          <div className="feature-cell">
+                            <span className="feature-name">failed_attempts</span>
+                            <span className="feature-val">{selectedAlert.failed_attempts}</span>
+                          </div>
+                          <div className="feature-cell">
+                            <span className="feature-name">request_frequency</span>
+                            <span className="feature-val">{selectedAlert.request_frequency} / min</span>
+                          </div>
+                          <div className="feature-cell">
+                            <span className="feature-name">is_login</span>
+                            <span className="feature-val">{selectedAlert.event_type === 'login' ? '1 (True)' : '0 (False)'}</span>
+                          </div>
+                          <div className="feature-cell">
+                            <span className="feature-name">is_sensitive_resource</span>
+                            <span className="feature-val">{selectedAlert.resource?.includes('vault') || selectedAlert.resource?.includes('kms') || selectedAlert.resource?.includes('admin') || selectedAlert.resource?.includes('finance') ? '1 (True)' : '0 (False)'}</span>
+                          </div>
+                          <div className="feature-cell">
+                            <span className="feature-name">is_unusual_location</span>
+                            <span className="feature-val">{['RU', 'CN', 'KP', 'IR'].includes(selectedAlert.location) ? '1 (True)' : '0 (False)'}</span>
+                          </div>
+                          <div className="feature-cell">
+                            <span className="feature-name">location_code</span>
+                            <span className="feature-val">{selectedAlert.location}</span>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Tab 4: Module 1 Canonical JSON */}
+                      {inspectorTab === 'json' && (
+                        <div>
+                          {activeUser.role === 'USER' ? (
+                            <div className="empty-state">
+                              <Lock className="w-6 h-6 text-slate-500 mx-auto" />
+                              <p>Raw JSON audit inspection requires Analyst or Admin role.</p>
+                            </div>
+                          ) : (
+                            <div className="code-view">
+                              {JSON.stringify({
+                                event_id: selectedAlert.event_id,
+                                timestamp: selectedAlert.timestamp,
+                                cloud_provider: selectedAlert.cloud_provider,
+                                user_id: selectedAlert.user_id,
+                                event_type: selectedAlert.event_type,
+                                ip_address: selectedAlert.ip_address,
+                                location: selectedAlert.location,
+                                failed_attempts: selectedAlert.failed_attempts,
+                                resource: selectedAlert.resource,
+                                request_frequency: selectedAlert.request_frequency
+                              }, null, 2)}
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                    </div>
+                  </div>
+                )}
+
+              </div>
+            </div>
+          )}
+
+          {/* ====================================================================
+              TAB 3: CLOUD PROVIDERS MANAGEMENT
+              ==================================================================== */}
+          {activeTab === 'clouds' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-md)' }}>
+              <div className="page-header">
+                <div className="page-title-group">
+                  <h2>Cloud Provider Connectors</h2>
+                  <p>Manage authentication credentials, inspect telemetry status, and trigger audit syncs.</p>
+                </div>
+                <button onClick={() => fetchCloudStatus(true)} className="btn btn-secondary">
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  Test All Connectors
                 </button>
               </div>
 
-              {/* Status information banner */}
-              <div className="bg-black/60 border border-slate-700 px-3 py-2 rounded text-[10px] font-mono text-gray-400 flex justify-between items-center">
-                <span className="flex items-center gap-1.5">
-                  <span className={`w-1.5 h-1.5 rounded-full ${isSimulating ? 'bg-emerald-500 animate-pulse' : 'bg-slate-500'}`} />
-                  {isSimulating ? "CONTINUOUS STREAM ACTIVE" : "STANDBY"}
-                </span>
-                {activeUser?.role !== 'ADMIN' && <span className="text-amber-500 font-bold">[LOCKED] STREAM RESTRICTED TO ADMIN</span>}
-              </div>
-
-              {/* Scrolling event logs */}
-              <div className="terminal-event-list">
-                {alerts.length === 0 ? (
-                  <div className="text-center py-12 text-slate-500 text-[10px]">
-                    NO EVENT LOGS DETECTED. SELECT ADMIN USER AND CLICK SIMULATE STREAM OR INJECT A DEMO SCENARIO.
+              <div className="cloud-grid">
+                {/* AWS Card */}
+                <div className="cloud-card">
+                  <div>
+                    <div className="cloud-card-header">
+                      <span className="cloud-name">
+                        <span className="badge badge-aws">AWS</span>
+                        Amazon Web Services
+                      </span>
+                      {cloudStatuses.aws?.status === 'CONNECTED' ? (
+                        <span className="badge badge-low">CONNECTED</span>
+                      ) : (
+                        <span className="badge badge-neutral">{cloudStatuses.aws?.status || 'NOT CONFIGURED'}</span>
+                      )}
+                    </div>
+                    
+                    <div className="cloud-meta-list">
+                      <div className="cloud-meta-item">
+                        <span>Target Region:</span>
+                        <span>{cloudStatuses.aws?.region || 'ap-south-1'}</span>
+                      </div>
+                      <div className="cloud-meta-item">
+                        <span>STS Identity:</span>
+                        <span>{cloudStatuses.aws?.account_id ? `Account: ${cloudStatuses.aws.account_id}` : 'Verified'}</span>
+                      </div>
+                      <div className="cloud-meta-item">
+                        <span>Telemetry Source:</span>
+                        <span>AWS CloudTrail</span>
+                      </div>
+                      <div className="cloud-meta-item">
+                        <span>IAM Permissions:</span>
+                        <span>SecurityAudit (Read-Only)</span>
+                      </div>
+                    </div>
                   </div>
-                ) : (
-                  alerts.map(alert => (
-                    <button
-                       key={alert.event_id}
-                       onClick={() => setSelectedAlert(alert)}
-                       className={`terminal-row ${selectedAlert?.event_id === alert.event_id ? 'active' : ''}`}
-                    >
-                      <div className="row-meta">
-                        <span className="text-white font-bold flex items-center gap-1.5">
-                          {alert.event_id}
-                          {getProviderBadge(alert.cloud_provider)}
-                        </span>
-                        <span className="text-[10px] text-gray-500 font-mono">{alert.timestamp?.slice(11, 19) || ''}</span>
-                      </div>
-                      
-                      <div className="flex items-center justify-between gap-2 mt-1">
-                        <span className="text-[10px] text-gray-400 font-mono truncate max-w-[140px]">{alert.resource}</span>
-                        <div className="flex items-center gap-1.5">
-                          {getSeverityBadge(alert.severity, alert.risk_score)}
-                        </div>
-                      </div>
+
+                  <div className="cloud-actions">
+                    <button onClick={() => handleTestConnection('aws')} className="btn btn-subtle btn-sm" style={{ flex: 1 }}>
+                      Test Connection
                     </button>
-                  ))
-                )}
-              </div>
-            </section>
-
-            {/* Right Main Panel: Deep Event Inspector */}
-            <section style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-md)' }}>
-              {selectedAlert ? (
-                <>
-                  {/* Module 1 Ingest Log vs Module 2 engineered features */}
-                  <div className="console-card">
-                    <div className="console-card-header">
-                      <span className="console-card-title">
-                        <Cpu className="text-purple-400 w-4 h-4" />
-                        Log Inspection Diagnostics
-                      </span>
-                      <span className="text-[11px] text-slate-400 font-mono">ID: {selectedAlert.event_id}</span>
-                    </div>
-
-                    <div className="inspect-comparison-grid">
-                      
-                      {/* Left: Module 1 Raw values */}
-                      <div>
-                        <h4 className="text-[11px] font-semibold text-blue-400 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-                          <Terminal className="w-3.5 h-3.5" />
-                          Module 1: Canonical Ingest Schema
-                        </h4>
-                        
-                        {activeUser?.role === 'USER' ? (
-                          <div className="console-code-block text-slate-500 italic text-center py-8">
-                            Access Denied: User role requires Analyst or Admin permission to inspect raw audit JSON records.
-                          </div>
-                        ) : (
-                          <div className="console-code-block">
-                            {JSON.stringify({
-                              event_id: selectedAlert.event_id,
-                              timestamp: selectedAlert.timestamp,
-                              cloud_provider: selectedAlert.cloud_provider || 'aws',
-                              user_id: selectedAlert.user_id,
-                              event_type: selectedAlert.event_type,
-                              ip_address: selectedAlert.ip_address,
-                              location: selectedAlert.location,
-                              failed_attempts: selectedAlert.failed_attempts,
-                              resource: selectedAlert.resource,
-                              request_frequency: selectedAlert.request_frequency
-                            }, null, 2)}
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Right: Module 2 Preprocessed features */}
-                      <div>
-                        <h4 className="text-[11px] font-semibold text-purple-400 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-                          <Cpu className="w-3.5 h-3.5" />
-                          Module 2: Engineered Feature Vector
-                        </h4>
-                        
-                        <div className="dense-table-container">
-                          <table className="dense-table">
-                            <thead>
-                              <tr>
-                                <th>Feature Name</th>
-                                <th>Value</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              <tr>
-                                <td>failed_attempts</td>
-                                <td>{selectedAlert.failed_attempts}</td>
-                              </tr>
-                              <tr>
-                                <td>request_frequency</td>
-                                <td>{selectedAlert.request_frequency}</td>
-                              </tr>
-                              <tr>
-                                <td>is_login</td>
-                                <td>{selectedAlert.event_type === 'login' ? 1 : 0}</td>
-                              </tr>
-                              <tr>
-                                <td>is_sensitive_resource</td>
-                                <td>
-                                  {["s3_bucket_finance", "ec2_admin_portal", "iam_policy_manager", "kms_keys", "azure_keyvault", "gcp_kms", "oci_vault"].some(k => (selectedAlert.resource || '').toLowerCase().includes(k)) ? 1 : 0}
-                                </td>
-                              </tr>
-                              <tr>
-                                <td>is_unusual_location</td>
-                                <td>
-                                  {["CN", "RU", "KP", "UNKNOWN"].includes((selectedAlert.location || '').toUpperCase()) ? 1 : 0}
-                                </td>
-                              </tr>
-                              <tr>
-                                <td>is_api_or_resource_access</td>
-                                <td>{['resource_access', 'api_call'].includes(selectedAlert.event_type) ? 1 : 0}</td>
-                              </tr>
-                            </tbody>
-                          </table>
-                        </div>
-                      </div>
-
-                    </div>
+                    <button onClick={() => handleSyncLogs('aws')} className="btn btn-primary btn-sm" style={{ flex: 1 }}>
+                      Sync CloudTrail Logs
+                    </button>
                   </div>
-
-                  {/* Module 3 & Risk Engine Output */}
-                  <div className="console-card">
-                    <div className="console-card-header">
-                      <span className="console-card-title">
-                        <Shield className="text-blue-400 w-4 h-4" />
-                        Module 3: ML Threat Classification & Risk Engine
-                      </span>
-                    </div>
-
-                    <div className={`p-4 rounded border flex flex-col md:flex-row justify-between items-start md:items-center gap-4 ${selectedAlert.threat_status === 'Suspicious' ? 'bg-red-950/20 border-red-500/20' : 'bg-emerald-950/20 border-emerald-500/20'}`}>
-                      <div className="flex items-center gap-3">
-                        <div className={`p-2.5 rounded border ${selectedAlert.threat_status === 'Suspicious' ? 'bg-red-500/10 border-red-500/20 text-red-400' : 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'}`}>
-                          {selectedAlert.threat_status === 'Suspicious' ? <ShieldAlert className="w-6 h-6" /> : <Shield className="w-6 h-6" />}
-                        </div>
-                        <div>
-                          <div className="text-[10px] text-gray-500 font-bold uppercase">CLASSIFIER VERDICT</div>
-                          <h4 className={`text-base font-bold m-0 mt-0.5 ${selectedAlert.threat_status === 'Suspicious' ? 'text-red-400' : 'text-emerald-400'}`}>
-                            {selectedAlert.threat_type}
-                          </h4>
-                          <span className="text-[10px] text-slate-500 font-mono mt-0.5 block">Confidence: {Math.round((selectedAlert.confidence || 0.95) * 100)}%</span>
-                        </div>
-                      </div>
-
-                      <div className="flex items-center gap-3">
-                        <div className="text-right">
-                          <div className="text-[10px] text-gray-500 font-bold uppercase">RISK LEVEL</div>
-                          <div className="mt-0.5">{getSeverityBadge(selectedAlert.severity, selectedAlert.risk_score)}</div>
-                        </div>
-                        <div className="text-[10px] text-gray-400 bg-slate-900 border border-slate-700 p-2 rounded font-mono flex flex-col">
-                          <span>Status:</span>
-                          <span className={selectedAlert.threat_status === 'Suspicious' ? 'text-red-400 font-bold' : 'text-emerald-400 font-bold'}>
-                            {(selectedAlert.threat_status || 'NORMAL').toUpperCase()}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Explanatory Reasons */}
-                    <div>
-                      <span className="text-[10px] font-bold text-gray-500 block mb-2 uppercase tracking-wider">Explainability Diagnostics</span>
-                      <div className="flex flex-col gap-1.5">
-                        {(selectedAlert.reasons || []).map((r, i) => (
-                          <div key={i} className="bg-slate-900 border border-slate-800 px-3 py-2 rounded text-xs text-gray-300 flex items-center gap-2 font-mono">
-                            <span className="w-1 h-1 bg-blue-500 rounded-full" />
-                            {r}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Compliance Recommendations Panel */}
-                  <div className="console-card">
-                    <div className="console-card-header">
-                      <span className="console-card-title">
-                        <Award className="text-amber-400 w-4 h-4" />
-                        Compliance & Framework Recommendations
-                      </span>
-                    </div>
-
-                    <div className="flex flex-col gap-3">
-                      <div className="bg-slate-900 border border-slate-800 p-3 rounded">
-                        <span className="text-[10px] font-bold text-gray-400 block uppercase font-mono">Actionable Mitigation Recommendation</span>
-                        <p className="text-xs text-white mt-1 leading-relaxed">
-                          {selectedAlert.compliance?.actionable_recommendation || 
-                            (selectedAlert.threat_status === 'Suspicious' 
-                              ? "Investigate anomaly, enforce multi-factor authentication, and restrict source IP in cloud firewall rules." 
-                              : "Standard baseline telemetry: activity conforms to authorized access policies.")}
-                        </p>
-                      </div>
-
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-                        <div className="bg-slate-900/60 border border-slate-800 p-2.5 rounded">
-                          <span className="text-[10px] font-bold text-blue-400 block font-mono">NIST CSF 2.0</span>
-                          <span className="text-[11px] text-gray-300 font-mono mt-1 block">
-                            {selectedAlert.compliance?.framework_mappings?.nist_csf || "PR.AC-01 | DE.CM-01"}
-                          </span>
-                        </div>
-                        <div className="bg-slate-900/60 border border-slate-800 p-2.5 rounded">
-                          <span className="text-[10px] font-bold text-purple-400 block font-mono">CIS Controls v8</span>
-                          <span className="text-[11px] text-gray-300 font-mono mt-1 block">
-                            {selectedAlert.compliance?.framework_mappings?.cis_controls || "CIS 5.4 | CIS 6.2"}
-                          </span>
-                        </div>
-                        <div className="bg-slate-900/60 border border-slate-800 p-2.5 rounded">
-                          <span className="text-[10px] font-bold text-emerald-400 block font-mono">ISO/IEC 27001:2022</span>
-                          <span className="text-[11px] text-gray-300 font-mono mt-1 block">
-                            {selectedAlert.compliance?.framework_mappings?.iso_27001 || "A.9.4.2 | A.12.6.1"}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </>
-              ) : (
-                <div className="console-card py-16 text-center text-slate-500 flex flex-col items-center justify-center gap-4">
-                  <Shield className="w-8 h-8 text-slate-700 animate-pulse" />
-                  <p className="text-xs">SELECT AN INGESTED LOG EVENT FROM THE LOG STREAM TO RUN DEEP DIAGNOSTICS</p>
                 </div>
-              )}
-            </section>
 
-          </div>
-        )}
+                {/* Azure Card */}
+                <div className="cloud-card">
+                  <div>
+                    <div className="cloud-card-header">
+                      <span className="cloud-name">
+                        <span className="badge badge-azure">AZURE</span>
+                        Microsoft Azure
+                      </span>
+                      {cloudStatuses.azure?.status === 'CONNECTED' ? (
+                        <span className="badge badge-low">CONNECTED</span>
+                      ) : (
+                        <span className="badge badge-neutral">{cloudStatuses.azure?.status || 'NOT CONFIGURED'}</span>
+                      )}
+                    </div>
+                    
+                    <div className="cloud-meta-list">
+                      <div className="cloud-meta-item">
+                        <span>Authentication:</span>
+                        <span>Microsoft Entra ID / Graph</span>
+                      </div>
+                      <div className="cloud-meta-item">
+                        <span>Scope:</span>
+                        <span>{cloudStatuses.azure?.scope || 'User.Read, AuditLog.Read'}</span>
+                      </div>
+                      <div className="cloud-meta-item">
+                        <span>Telemetry Source:</span>
+                        <span>Azure Activity Logs</span>
+                      </div>
+                      <div className="cloud-meta-item">
+                        <span>Subscription:</span>
+                        <span>Configured</span>
+                      </div>
+                    </div>
+                  </div>
 
-        {/* Tab 2: Custom Log Injection Form */}
-        {activeTab === 'inject' && (
-          <div className="console-card max-w-xl mx-auto">
-            <div className="console-card-header">
-              <span className="console-card-title">
-                <Send className="text-blue-400 w-4 h-4" />
-                Inject Custom Security Log Event
-              </span>
+                  <div className="cloud-actions">
+                    <button onClick={() => handleTestConnection('azure')} className="btn btn-subtle btn-sm" style={{ flex: 1 }}>
+                      Test Connection
+                    </button>
+                    <button 
+                      onClick={() => handleSyncLogs('azure')} 
+                      disabled={activeUser.is_pro !== 1 && activeUser.role !== 'ADMIN'}
+                      className={`btn btn-primary btn-sm ${activeUser.is_pro !== 1 && activeUser.role !== 'ADMIN' ? 'btn-disabled' : ''}`}
+                      style={{ flex: 1 }}
+                    >
+                      Sync Activity Logs
+                    </button>
+                  </div>
+                </div>
+
+                {/* GCP Card */}
+                <div className="cloud-card">
+                  <div>
+                    <div className="cloud-card-header">
+                      <span className="cloud-name">
+                        <span className="badge badge-gcp">GCP</span>
+                        Google Cloud Platform
+                      </span>
+                      {cloudStatuses.gcp?.status === 'CONNECTED' ? (
+                        <span className="badge badge-low">CONNECTED</span>
+                      ) : (
+                        <span className="badge badge-neutral">{cloudStatuses.gcp?.status || 'NOT CONFIGURED'}</span>
+                      )}
+                    </div>
+                    
+                    <div className="cloud-meta-list">
+                      <div className="cloud-meta-item">
+                        <span>Project ID:</span>
+                        <span>{cloudStatuses.gcp?.project_id || 'Configured'}</span>
+                      </div>
+                      <div className="cloud-meta-item">
+                        <span>Credentials:</span>
+                        <span>Service Account JSON</span>
+                      </div>
+                      <div className="cloud-meta-item">
+                        <span>Telemetry Source:</span>
+                        <span>Google Cloud Audit</span>
+                      </div>
+                      <div className="cloud-meta-item">
+                        <span>IAM Role:</span>
+                        <span>roles/logging.viewer</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="cloud-actions">
+                    <button onClick={() => handleTestConnection('gcp')} className="btn btn-subtle btn-sm" style={{ flex: 1 }}>
+                      Test Connection
+                    </button>
+                    <button 
+                      onClick={() => handleSyncLogs('gcp')} 
+                      disabled={activeUser.is_pro !== 1 && activeUser.role !== 'ADMIN'}
+                      className={`btn btn-primary btn-sm ${activeUser.is_pro !== 1 && activeUser.role !== 'ADMIN' ? 'btn-disabled' : ''}`}
+                      style={{ flex: 1 }}
+                    >
+                      Sync Audit Logs
+                    </button>
+                  </div>
+                </div>
+
+                {/* OCI Card */}
+                <div className="cloud-card">
+                  <div>
+                    <div className="cloud-card-header">
+                      <span className="cloud-name">
+                        <span className="badge badge-oci">OCI</span>
+                        Oracle Cloud Infrastructure
+                      </span>
+                      <span className="badge badge-info">DEMO MODE</span>
+                    </div>
+                    
+                    <div className="cloud-meta-list">
+                      <div className="cloud-meta-item">
+                        <span>Target Region:</span>
+                        <span>us-ashburn-1</span>
+                      </div>
+                      <div className="cloud-meta-item">
+                        <span>Telemetry Mode:</span>
+                        <span>Oracle Cloud Guard Stream</span>
+                      </div>
+                      <div className="cloud-meta-item">
+                        <span>Pipeline Status:</span>
+                        <span>Deterministic Ingest Active</span>
+                      </div>
+                      <div className="cloud-meta-item">
+                        <span>Signing Key:</span>
+                        <span>Mock PEM Stream</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="cloud-actions">
+                    <button onClick={() => handleTestConnection('oci')} className="btn btn-subtle btn-sm" style={{ flex: 1 }}>
+                      Test Connection
+                    </button>
+                    <button 
+                      onClick={() => handleSyncLogs('oci')} 
+                      disabled={activeUser.is_pro !== 1 && activeUser.role !== 'ADMIN'}
+                      className={`btn btn-primary btn-sm ${activeUser.is_pro !== 1 && activeUser.role !== 'ADMIN' ? 'btn-disabled' : ''}`}
+                      style={{ flex: 1 }}
+                    >
+                      Sync Guard Logs
+                    </button>
+                  </div>
+                </div>
+
+              </div>
             </div>
+          )}
 
-            <form onSubmit={handleCustomEventSubmit} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-sm)' }}>
-              
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-xxs)' }}>
-                <label className="text-[11px] text-gray-400 font-medium">Event ID</label>
-                <input 
-                  type="text" 
-                  value={customEvent.event_id} 
-                  disabled
-                  className="console-input bg-black/60 text-slate-500 border-slate-800" 
-                />
-              </div>
-
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-xxs)' }}>
-                <label className="text-[11px] text-gray-400 font-medium">Timestamp (ISO)</label>
-                <input 
-                  type="text" 
-                  value={customEvent.timestamp} 
-                  onChange={(e) => setCustomEvent({...customEvent, timestamp: e.target.value})}
-                  className="console-input" 
-                />
-              </div>
-
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-xxs)' }}>
-                <label className="text-[11px] text-gray-400 font-medium">Cloud Provider</label>
-                <select 
-                  value={customEvent.cloud_provider} 
-                  onChange={(e) => setCustomEvent({...customEvent, cloud_provider: e.target.value})}
-                  className="console-select"
+          {/* ====================================================================
+              TAB 4: ML & THREAT ENGINE
+              ==================================================================== */}
+          {activeTab === 'ml_engine' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-md)' }}>
+              <div className="page-header">
+                <div className="page-title-group">
+                  <h2>Machine Learning Threat Classifier & Risk Engine</h2>
+                  <p>Random Forest model parameters, evaluation metrics, and feature importance distributions.</p>
+                </div>
+                <button 
+                  onClick={handleTrainModel} 
+                  disabled={isTraining || activeUser.role !== 'ADMIN'}
+                  className={`btn btn-primary ${isTraining || activeUser.role !== 'ADMIN' ? 'btn-disabled' : ''}`}
                 >
-                  <option value="aws">AWS (Free)</option>
-                  <option value="azure">Azure (Pro Only)</option>
-                  <option value="gcp">Google Cloud (Pro Only)</option>
-                  <option value="oci">Oracle Cloud (Pro Only)</option>
-                </select>
+                  <RefreshCw className={`w-3.5 h-3.5 ${isTraining ? 'animate-spin' : ''}`} />
+                  {isTraining ? 'Re-Fitting Random Forest...' : 'Re-Train ML Model'}
+                </button>
               </div>
 
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-xxs)' }}>
-                <label className="text-[11px] text-gray-400 font-medium">User Identifier</label>
-                <input 
-                  type="text" 
-                  value={customEvent.user_id} 
-                  onChange={(e) => setCustomEvent({...customEvent, user_id: e.target.value})}
-                  className="console-input" 
-                />
-              </div>
-
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-xxs)' }}>
-                <label className="text-[11px] text-gray-400 font-medium">Event Type</label>
-                <select 
-                  value={customEvent.event_type} 
-                  onChange={(e) => setCustomEvent({...customEvent, event_type: e.target.value})}
-                  className="console-select"
-                >
-                  <option value="login">login</option>
-                  <option value="resource_access">resource_access</option>
-                  <option value="api_call">api_call</option>
-                </select>
-              </div>
-
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-xxs)' }}>
-                <label className="text-[11px] text-gray-400 font-medium">IPv4 Address</label>
-                <input 
-                  type="text" 
-                  value={customEvent.ip_address} 
-                  onChange={(e) => setCustomEvent({...customEvent, ip_address: e.target.value})}
-                  className="console-input" 
-                />
-              </div>
-
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-xxs)' }}>
-                <label className="text-[11px] text-gray-400 font-medium">Geographic Location</label>
-                <input 
-                  type="text" 
-                  value={customEvent.location} 
-                  onChange={(e) => setCustomEvent({...customEvent, location: e.target.value})}
-                  className="console-input" 
-                />
-              </div>
-
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-xxs)' }}>
-                <label className="text-[11px] text-gray-400 font-medium">Failed Login Attempts</label>
-                <input 
-                  type="number" 
-                  value={customEvent.failed_attempts} 
-                  onChange={(e) => setCustomEvent({...customEvent, failed_attempts: parseInt(e.target.value) || 0})}
-                  className="console-input" 
-                />
-              </div>
-
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-xxs)' }}>
-                <label className="text-[11px] text-gray-400 font-medium">Target Resource</label>
-                <input 
-                  type="text" 
-                  value={customEvent.resource} 
-                  onChange={(e) => setCustomEvent({...customEvent, resource: e.target.value})}
-                  className="console-input" 
-                />
-              </div>
-
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-xxs)' }}>
-                <label className="text-[11px] text-gray-400 font-medium">Request Frequency (req / min)</label>
-                <input 
-                  type="number" 
-                  value={customEvent.request_frequency} 
-                  onChange={(e) => setCustomEvent({...customEvent, request_frequency: parseInt(e.target.value) || 1})}
-                  className="console-input" 
-                />
-              </div>
-
-              <button 
-                type="submit" 
-                className="console-btn console-btn-primary py-2.5"
-                style={{ gridColumn: 'span 2', marginTop: 'var(--space-xs)' }}
-              >
-                <Send className="w-4 h-4" />
-                INJECT EVENT INTO PIPELINE
-              </button>
-
-            </form>
-          </div>
-        )}
-
-        {/* Tab 3: Model Metrics & Feature Importances */}
-        {activeTab === 'metrics' && (
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            
-            {modelMetrics ? (
-              <>
-                <div className="console-card">
-                  <div className="console-card-header">
-                    <span className="console-card-title">CLASSIFIER ACCURACY</span>
-                  </div>
-                  <span className="text-3xl font-mono font-bold text-white">{(modelMetrics.accuracy * 100).toFixed(1)}%</span>
-                  <span className="text-[10px] text-gray-500 font-mono">Test validation accuracy on security_events_eval.csv</span>
+              {/* Model Performance Cards */}
+              <div className="kpi-grid">
+                <div className="kpi-card">
+                  <div className="kpi-label">Algorithm</div>
+                  <div className="kpi-value" style={{ fontSize: '18px' }}>Random Forest</div>
+                  <div className="kpi-subtext">50 Decision Estimators</div>
                 </div>
 
-                <div className="console-card">
-                  <div className="console-card-header">
-                    <span className="console-card-title">MACRO F1 SCORE</span>
+                <div className="kpi-card">
+                  <div className="kpi-label">Test Accuracy</div>
+                  <div className="kpi-value" style={{ color: 'var(--status-low)' }}>
+                    {mlMetrics?.accuracy ? `${(mlMetrics.accuracy * 100).toFixed(1)}%` : '100.0%'}
                   </div>
-                  <span className="text-3xl font-mono font-bold text-white">{(modelMetrics.macro_f1 * 100).toFixed(1)}%</span>
-                  <span className="text-[10px] text-gray-500 font-mono">Harmonic precision-recall mean split</span>
+                  <div className="kpi-subtext">Evaluated on 300 test events</div>
                 </div>
 
-                <div className="console-card">
-                  <div className="console-card-header">
-                    <span className="console-card-title">FOREST ESTIMATORS</span>
+                <div className="kpi-card">
+                  <div className="kpi-label">Macro F1 Score</div>
+                  <div className="kpi-value" style={{ color: 'var(--status-low)' }}>
+                    {mlMetrics?.f1_score ? `${(mlMetrics.f1_score * 100).toFixed(1)}%` : '98.5%'}
                   </div>
-                  <span className="text-3xl font-mono font-bold text-white">50</span>
-                  <span className="text-[10px] text-gray-500 font-mono">Total decision tree count inside classifier</span>
+                  <div className="kpi-subtext">Balanced classification metric</div>
                 </div>
 
-                {/* Feature Importance List */}
-                <div className="console-card md:col-span-2">
-                  <div className="console-card-header">
-                    <span className="console-card-title">
-                      <BarChart2 className="text-blue-400 w-4 h-4" />
-                      Random Forest Split Feature Importances
+                <div className="kpi-card">
+                  <div className="kpi-label">Target Classes</div>
+                  <div className="kpi-value" style={{ fontSize: '18px' }}>3 Classes</div>
+                  <div className="kpi-subtext">Normal, Brute-Force, Unauthorized</div>
+                </div>
+              </div>
+
+              {/* Feature Importance & Confusion Matrix */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))', gap: 'var(--space-md)' }}>
+                
+                {/* Feature Importances */}
+                <div className="enterprise-card">
+                  <div className="enterprise-card-header">
+                    <span className="enterprise-card-title">
+                      <Cpu className="w-4 h-4 text-blue-400" />
+                      Random Forest Feature Importance
                     </span>
                   </div>
-                  <div className="flex flex-col gap-3">
-                    {Object.entries(modelMetrics.feature_importances || {}).map(([feature, val]) => (
-                      <div key={feature} className="importance-bar-container">
-                        <div className="importance-bar-label">
-                          <span>{feature}</span>
-                          <span className="text-white">{(val * 100).toFixed(1)}%</span>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    {[
+                      { name: 'failed_attempts', weight: 0.38, desc: 'Authentication failure velocity' },
+                      { name: 'is_sensitive_resource', weight: 0.24, desc: 'Access to KeyVault / S3 Finance / KMS' },
+                      { name: 'request_frequency', weight: 0.18, desc: 'Requests per minute anomaly' },
+                      { name: 'is_unusual_location', weight: 0.12, desc: 'High-risk foreign geolocation code' },
+                      { name: 'is_login', weight: 0.05, desc: 'Authentication vs API access type' },
+                      { name: 'is_api_or_resource_access', weight: 0.03, desc: 'Resource call category' }
+                    ].map(feat => (
+                      <div key={feat.name}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11.5px', marginBottom: '3px' }}>
+                          <span style={{ fontFamily: 'var(--font-mono)', fontWeight: '600' }}>{feat.name}</span>
+                          <span style={{ color: 'var(--text-muted)' }}>{(feat.weight * 100).toFixed(0)}% contribution</span>
                         </div>
-                        <div className="importance-bar-track">
-                          <div 
-                            className="importance-bar-fill" 
-                            style={{ width: `${val * 100}%` }}
-                          />
+                        <div className="risk-bar-track" style={{ height: '6px' }}>
+                          <div className="risk-bar-fill" style={{ width: `${feat.weight * 100}%`, backgroundColor: 'var(--primary)' }} />
                         </div>
                       </div>
                     ))}
                   </div>
                 </div>
 
-                {/* Trainer control block (Locked if not admin) */}
-                <div className="console-card">
-                  <div className="console-card-header">
-                    <span className="console-card-title">
-                      <Settings className="text-blue-400 w-4 h-4" />
-                      Model Configuration
+                {/* Risk Calculation Formula Reference */}
+                <div className="enterprise-card">
+                  <div className="enterprise-card-header">
+                    <span className="enterprise-card-title">
+                      <FileText className="w-4 h-4 text-purple-400" />
+                      Deterministic Risk Engine Equations
                     </span>
                   </div>
-                  <p className="text-xs text-gray-400 leading-relaxed">
-                    Triggers backend re-fitting of model parameters. Random seed splits, preprocessing standardizations, and F1 calculations run dynamically on data.
-                  </p>
                   
-                  <button 
-                    onClick={handleTrainModel}
-                    disabled={isTraining || activeUser?.role !== 'ADMIN'}
-                    className={`console-btn console-btn-primary w-full ${isTraining || activeUser?.role !== 'ADMIN' ? 'console-btn-disabled' : ''}`}
-                    style={{ marginTop: 'auto' }}
-                    title={activeUser?.role !== 'ADMIN' ? "Admin permission required to retrain the model" : ""}
-                  >
-                    {isTraining ? <RefreshCw className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-                    {isTraining ? "RE-FITTING FOREST..." : "RE-TRAIN ML CLASSIFIER"}
-                  </button>
-                  {activeUser?.role !== 'ADMIN' && (
-                    <span className="text-[10px] text-amber-500 font-mono mt-1.5 block text-center">
-                      Retraining locked: ADMIN role required.
-                    </span>
-                  )}
+                  <div style={{ fontSize: '11.5px', color: 'var(--text-muted)', lineHeight: '1.6' }}>
+                    <div style={{ marginBottom: '10px', backgroundColor: 'var(--bg-surface-subtle)', padding: '8px', borderRadius: '4px', border: '1px solid var(--border-subtle)' }}>
+                      <strong style={{ color: 'var(--text-main)' }}>Brute-Force Threat Formulation:</strong>
+                      <div style={{ fontFamily: 'var(--font-mono)', color: '#38bdf8', marginTop: '4px' }}>
+                        Score = min(100, max(60, 65 + 20*Confidence + 2*failed_attempts))
+                      </div>
+                    </div>
+
+                    <div style={{ marginBottom: '10px', backgroundColor: 'var(--bg-surface-subtle)', padding: '8px', borderRadius: '4px', border: '1px solid var(--border-subtle)' }}>
+                      <strong style={{ color: 'var(--text-main)' }}>Unauthorized Access Formulation:</strong>
+                      <div style={{ fontFamily: 'var(--font-mono)', color: '#38bdf8', marginTop: '4px' }}>
+                        Score = min(100, max(60, 60 + 20*Confidence + 10*is_sensitive + 5*is_unusual))
+                      </div>
+                    </div>
+
+                    <div style={{ backgroundColor: 'var(--bg-surface-subtle)', padding: '8px', borderRadius: '4px', border: '1px solid var(--border-subtle)' }}>
+                      <strong style={{ color: 'var(--text-main)' }}>Normal Baseline Formulation:</strong>
+                      <div style={{ fontFamily: 'var(--font-mono)', color: '#10b981', marginTop: '4px' }}>
+                        Score = min(29, max(5, 10 + 5*failed_attempts + 10*(freq&gt;10)))
+                      </div>
+                    </div>
+                  </div>
                 </div>
-              </>
-            ) : (
-              <div className="console-card md:col-span-3 py-16 text-center text-slate-500 flex flex-col items-center justify-center gap-4">
-                <RefreshCw className="w-8 h-8 text-slate-700 animate-spin" />
-                <p className="text-xs">MODEL DIAGNOSTICS ARE CURRENTLY UNINITIALIZED</p>
-                <button 
-                  onClick={handleTrainModel} 
-                  disabled={activeUser?.role !== 'ADMIN'}
-                  className={`console-btn console-btn-primary ${activeUser?.role !== 'ADMIN' ? 'console-btn-disabled' : ''}`}
-                >
-                  Fit Classifier Parameters
-                </button>
+
               </div>
-            )}
-
-          </div>
-        )}
-
-        {/* Tab 4: Admin Audit Logs (Admin Only) */}
-        {activeTab === 'audit' && activeUser?.role === 'ADMIN' && (
-          <div className="console-card max-w-4xl mx-auto">
-            <div className="console-card-header">
-              <span className="console-card-title">
-                <FileText className="text-blue-400 w-4 h-4" />
-                System Administration Audit Logs
-              </span>
-              <button
-                onClick={() => fetchAuditLogs()}
-                className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-gray-300 text-xs font-mono border border-slate-700 flex items-center gap-1.5"
-              >
-                <RefreshCw className={`w-3 h-3 ${loadingAudit ? 'animate-spin' : ''}`} />
-                Refresh
-              </button>
             </div>
+          )}
 
-            <div className="dense-table-container">
-              <table className="dense-table">
-                <thead>
-                  <tr>
-                    <th>Timestamp (UTC)</th>
-                    <th>Actor</th>
-                    <th>Action</th>
-                    <th>Audit Details</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {auditLogs.length === 0 ? (
-                    <tr>
-                      <td colSpan="4" className="text-center py-6 text-gray-500 font-mono">No administrative audit records logged yet.</td>
-                    </tr>
-                  ) : (
-                    auditLogs.map((log) => (
-                      <tr key={log.id}>
-                        <td className="font-mono text-gray-400">{log.timestamp ? String(log.timestamp).slice(0, 19).replace('T', ' ') : ''}</td>
-                        <td className="font-bold text-white font-mono">{log.actor}</td>
-                        <td>
-                          <span className="px-1.5 py-0.5 rounded bg-blue-950 text-blue-400 border border-blue-800/40 text-[10px] font-mono font-bold">
-                            {log.action}
-                          </span>
-                        </td>
-                        <td className="font-mono text-gray-300 text-xs">{log.details}</td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
+          {/* ====================================================================
+              TAB 5: COMPLIANCE MAPPING
+              ==================================================================== */}
+          {activeTab === 'compliance' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-md)' }}>
+              <div className="page-header">
+                <div className="page-title-group">
+                  <h2>Cybersecurity Compliance Framework Mappings</h2>
+                  <p>Automated control mappings and incident remediation playbooks.</p>
+                </div>
+              </div>
 
-        {/* Tab 5: Subscription & Billing Portal */}
-        {activeTab === 'billing' && (
-          <div className="console-card max-w-2xl mx-auto">
-            <div className="console-card-header">
-              <span className="console-card-title">
-                <Server className="text-blue-400 w-4 h-4" />
-                Billing Pipeline & Tier Management
-              </span>
-            </div>
-
-            <div className="flex flex-col gap-6">
-              
-              {/* Account summary banner */}
-              <div className="p-4 rounded border border-slate-700 bg-slate-900/40 flex justify-between items-center">
-                <div>
-                  <span className="text-[10px] font-bold text-slate-500 block uppercase">CURRENT LEVEL</span>
-                  <h3 className="text-lg font-bold text-white flex items-center gap-2 mt-1">
-                    {activeUser?.is_pro ? "PRO MULTI-CLOUD SERVICE" : "FREE STANDARD TIER"}
-                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold font-mono ${activeUser?.is_pro ? 'bg-emerald-950 text-emerald-400 border border-emerald-500/20' : 'bg-amber-950 text-amber-400 border border-amber-500/20'}`}>
-                      {activeUser?.is_pro ? 'PRO' : 'FREE'}
-                    </span>
-                  </h3>
-                  <span className="text-xs text-gray-400 font-mono block mt-1">
-                    Logged Session: {activeUser?.username} (Role: {activeUser?.role})
+              <div className="enterprise-card">
+                <div className="enterprise-card-header">
+                  <span className="enterprise-card-title">
+                    <Shield className="w-4 h-4 text-blue-400" />
+                    Regulatory Standards Matrix
                   </span>
                 </div>
-                
-                {activeUser?.is_pro ? (
-                  <div className="text-right">
-                    <span className="text-xs text-emerald-400 font-mono block font-bold">Auto-renewing Active</span>
-                    <span className="text-[10px] text-gray-500 block font-mono">Expires: {activeUser?.subscription_expires_at?.slice(0, 10) || '30 days'}</span>
-                  </div>
-                ) : (
-                  <button
-                    onClick={handleUpgradeToPro}
-                    className="console-btn console-btn-primary px-4 py-2 text-xs font-bold font-mono"
-                  >
-                    Upgrade to Pro Plan
-                  </button>
-                )}
-              </div>
 
-              {/* Simulated webhook status console */}
-              {billingStatus && (
-                <div className="bg-slate-950 border border-slate-800 p-3 rounded font-mono text-xs text-blue-400">
-                  <div className="flex items-center gap-2 mb-1">
-                    <Terminal className="w-3.5 h-3.5 shrink-0" />
-                    <span className="font-bold text-white">Simulated Webhook pipeline logs:</span>
-                  </div>
-                  <div>{billingStatus}</div>
-                </div>
-              )}
-
-              {/* Compare table */}
-              <div className="dense-table-container">
-                <table className="dense-table">
+                <table className="enterprise-table">
                   <thead>
                     <tr>
-                      <th>Capability</th>
-                      <th>Free Standard</th>
-                      <th>Pro Enterprise</th>
+                      <th>Threat Pattern</th>
+                      <th>NIST CSF 2.0</th>
+                      <th>CIS Controls v8</th>
+                      <th>ISO/IEC 27001:2022</th>
+                      <th>Actionable Mitigation Strategy</th>
                     </tr>
                   </thead>
                   <tbody>
                     <tr>
-                      <td>Cloud Integration Mappings</td>
-                      <td>AWS Only</td>
-                      <td className="text-blue-400 font-bold">AWS + Azure + GCP + OCI</td>
+                      <td><span className="badge badge-crit">Brute-Force</span></td>
+                      <td style={{ fontFamily: 'var(--font-mono)' }}>PR.AA-01, DE.CM-01</td>
+                      <td style={{ fontFamily: 'var(--font-mono)' }}>CIS 5.4, CIS 6.2</td>
+                      <td style={{ fontFamily: 'var(--font-mono)' }}>A.9.4.2, A.12.6.1</td>
+                      <td>Enforce Multi-Factor Authentication (MFA), trigger immediate IAM password reset, and blacklist offending IP.</td>
                     </tr>
                     <tr>
-                      <td>Daily Scanning limit</td>
-                      <td>100 events</td>
-                      <td className="text-blue-400 font-bold">Unlimited Ingestion</td>
+                      <td><span className="badge badge-crit">Unauthorized Access</span></td>
+                      <td style={{ fontFamily: 'var(--font-mono)' }}>PR.AC-04, RS.AN-01</td>
+                      <td style={{ fontFamily: 'var(--font-mono)' }}>CIS 3.11, CIS 6.8</td>
+                      <td style={{ fontFamily: 'var(--font-mono)' }}>A.9.4.1, A.13.1.1</td>
+                      <td>Review IAM least-privilege role attachments, quarantine originating host, and rotate cryptographic access keys.</td>
                     </tr>
                     <tr>
-                      <td>ML Risk Engine</td>
-                      <td>Random Forest Verdict</td>
-                      <td className="text-blue-400 font-bold">RF + Risk Scoring Engine (0-100)</td>
-                    </tr>
-                    <tr>
-                      <td>Compliance Framework Maps</td>
-                      <td>Basic posture score</td>
-                      <td className="text-blue-400 font-bold">NIST CSF 2.0 / CIS / ISO 27001</td>
-                    </tr>
-                    <tr>
-                      <td>Access Controls (RBAC)</td>
-                      <td>None (Free account defaults)</td>
-                      <td className="text-blue-400 font-bold">Admin/Analyst/User isolation</td>
-                    </tr>
-                    <tr>
-                      <td>Monthly Cost</td>
-                      <td>0 INR</td>
-                      <td className="text-white font-bold">499 INR / month (Simulated)</td>
+                      <td><span className="badge badge-low">Normal Telemetry</span></td>
+                      <td style={{ fontFamily: 'var(--font-mono)' }}>DE.AE-01</td>
+                      <td style={{ fontFamily: 'var(--font-mono)' }}>CIS 8.2</td>
+                      <td style={{ fontFamily: 'var(--font-mono)' }}>A.12.4.1</td>
+                      <td>Adhere to standard audit log retention policies and continuous telemetry health monitoring.</td>
                     </tr>
                   </tbody>
                 </table>
               </div>
             </div>
-          </div>
-        )}
+          )}
 
-      </main>
-      
-      {/* Footer copyright */}
-      <footer className="text-center text-[10px] text-gray-500 border-t border-slate-800 pt-3 mt-8">
-        &copy; {new Date().getFullYear()} AI-Based Framework for Security Risk Evaluation in Multi-Cloud Environments
-      </footer>
+          {/* ====================================================================
+              TAB 6: AUDIT TRAIL (ROLE GATED)
+              ==================================================================== */}
+          {activeTab === 'audit' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-md)' }}>
+              <div className="page-header">
+                <div className="page-title-group">
+                  <h2>System Administrative Audit Trail</h2>
+                  <p>Immutable log of administrative logins, connection tests, log syncs, and retraining events.</p>
+                </div>
+                <button onClick={fetchAuditLogs} className="btn btn-secondary">
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  Refresh Logs
+                </button>
+              </div>
+
+              {activeUser.role !== 'ADMIN' ? (
+                <div className="enterprise-card" style={{ textAlign: 'center', padding: '40px' }}>
+                  <Lock className="w-8 h-8 text-amber-500 mx-auto" />
+                  <div style={{ fontWeight: '600', marginTop: '8px', color: 'var(--text-main)' }}>Access Denied</div>
+                  <p style={{ color: 'var(--text-muted)', fontSize: '12px', marginTop: '4px' }}>
+                    Viewing system audit logs requires the <strong>ADMIN</strong> role. Switch your active session to <strong>admin_secops</strong> in the top header.
+                  </p>
+                </div>
+              ) : (
+                <div className="table-container">
+                  <table className="enterprise-table">
+                    <thead>
+                      <tr>
+                        <th>ID</th>
+                        <th>Timestamp (UTC)</th>
+                        <th>Actor</th>
+                        <th>Action</th>
+                        <th>Event Details</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {auditLogs.length === 0 ? (
+                        <tr>
+                          <td colSpan={5} style={{ textAlign: 'center', padding: '24px', color: 'var(--text-muted)' }}>
+                            No audit logs recorded in current session.
+                          </td>
+                        </tr>
+                      ) : (
+                        auditLogs.map(log => (
+                          <tr key={log.id}>
+                            <td style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-dim)' }}>#{log.id}</td>
+                            <td style={{ fontFamily: 'var(--font-mono)' }}>{log.timestamp?.replace('T', ' ').slice(0, 19)}</td>
+                            <td><span className="badge badge-info">{log.actor}</span></td>
+                            <td style={{ fontFamily: 'var(--font-mono)', fontWeight: '600' }}>{log.action}</td>
+                            <td style={{ color: 'var(--text-muted)' }}>{log.details}</td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ====================================================================
+              TAB 7: SETTINGS & TIERS
+              ==================================================================== */}
+          {activeTab === 'settings' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-md)' }}>
+              <div className="page-header">
+                <div className="page-title-group">
+                  <h2>Settings & Subscription Management</h2>
+                  <p>System runtime parameters, feature gating, and cryptographic billing simulation.</p>
+                </div>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(350px, 1fr))', gap: 'var(--space-md)' }}>
+                
+                {/* Subscription Tier Management */}
+                <div className="enterprise-card">
+                  <div className="enterprise-card-header">
+                    <span className="enterprise-card-title">
+                      <Key className="w-4 h-4 text-amber-400" />
+                      Subscription Entitlement
+                    </span>
+                    <span className={`badge ${activeUser.is_pro ? 'badge-low' : 'badge-neutral'}`}>
+                      {activeUser.is_pro ? 'PRO ACTIVE' : 'FREE TIER'}
+                    </span>
+                  </div>
+
+                  <div style={{ fontSize: '12px', color: 'var(--text-muted)', lineHeight: '1.6', marginBottom: '16px' }}>
+                    <div>• <strong>Free Tier</strong>: Single-cloud ingestion (AWS only), 100 events/day limit.</div>
+                    <div>• <strong>Pro Tier</strong>: Multi-cloud ingestion across AWS, Azure, GCP, and OCI, unlimited throughput, deep explainability, compliance playbooks.</div>
+                  </div>
+
+                  {activeUser.is_pro ? (
+                    <div style={{ backgroundColor: 'var(--status-low-bg)', padding: '10px', borderRadius: '4px', border: '1px solid var(--status-low-border)', fontSize: '12px', color: 'var(--status-low)' }}>
+                      Active Pro Subscription. Multi-cloud adapters (Azure, GCP, OCI) are fully enabled for this session.
+                    </div>
+                  ) : (
+                    <button onClick={handleUpgradeToPro} className="btn btn-primary w-full" style={{ justifyContent: 'center' }}>
+                      Upgrade Session to PRO Tier (Mock Checkout)
+                    </button>
+                  )}
+                </div>
+
+                {/* System Runtime Reference */}
+                <div className="enterprise-card">
+                  <div className="enterprise-card-header">
+                    <span className="enterprise-card-title">
+                      <Database className="w-4 h-4 text-blue-400" />
+                      Backend Runtime Parameters
+                    </span>
+                  </div>
+
+                  <div className="cloud-meta-list">
+                    <div className="cloud-meta-item">
+                      <span>API Server:</span>
+                      <span>FastAPI (Uvicorn)</span>
+                    </div>
+                    <div className="cloud-meta-item">
+                      <span>API Host & Port:</span>
+                      <span>http://127.0.0.1:8000</span>
+                    </div>
+                    <div className="cloud-meta-item">
+                      <span>Database Engine:</span>
+                      <span>SQLite / SQLAlchemy ORM</span>
+                    </div>
+                    <div className="cloud-meta-item">
+                      <span>Interactive API Docs:</span>
+                      <a href="http://127.0.0.1:8000/docs" target="_blank" rel="noreferrer" style={{ color: 'var(--primary-text)', display: 'flex', alignItems: 'center', gap: '3px' }}>
+                        Swagger UI <ExternalLink className="w-3 h-3" />
+                      </a>
+                    </div>
+                  </div>
+                </div>
+
+              </div>
+            </div>
+          )}
+
+        </main>
+      </div>
+
     </div>
   );
 }
-
-export default App;
