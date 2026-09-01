@@ -54,6 +54,7 @@ The complete documentation suite is organized in the `docs/` directory:
 - [09. GCP Setup](file:///c:/Users/Windows/Documents/cloud/docs/09_GCP_SETUP.md): Service account key configuration and Cloud Audit Log ingestion.
 - [10. OCI Setup](file:///c:/Users/Windows/Documents/cloud/docs/10_OCI_SETUP.md): Oracle Cloud Guard integration and verified Demo Mode stream.
 - [Cloud Provider Setup and Usage Audit](file:///c:/Users/Windows/Documents/cloud/docs/CLOUD_PROVIDER_SETUP_AND_USAGE_AUDIT.md): Comprehensive cloud provider audit, environment variables analysis, step-by-step setup, and demonstration workflow.
+- [Cloud Event Collection Audit](file:///c:/Users/Windows/Documents/cloud/docs/CLOUD_EVENT_COLLECTION_AUDIT.md): Source-code audit of event collection, live execution results, and telemetry generation instructions.
 
 ### Security, Authentication, and Tiers
 - [11. Credential Security](file:///c:/Users/Windows/Documents/cloud/docs/11_CREDENTIAL_SECURITY.md): Secrets isolation, ignore rules, and zero-leakage policies.
