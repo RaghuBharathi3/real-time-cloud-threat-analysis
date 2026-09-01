@@ -1,106 +1,90 @@
-# AI-Based Framework for Security Risk Evaluation in Multi-Cloud Environments
+# Multi-Cloud Security Risk Evaluation Framework
 
-An intelligent multi-cloud security operations platform that ingests, validates, and normalizes audit telemetry across **AWS, Microsoft Azure, Google Cloud Platform (GCP), and Oracle Cloud Infrastructure (OCI)**, evaluates threats using a trained **Random Forest** machine learning classifier, computes deterministic **Risk Scores (0–100)**, and outputs automated compliance recommendations (**NIST CSF 2.0, CIS Controls v8, ISO/IEC 27001:2022**).
-
----
-
-## ⚡ Quick Start (One-Click)
-
-The entire platform runs 100% self-contained on Windows with zero external blocking dependencies:
-
-1. **Start Platform**: Double-click [**`START_PROJECT.bat`**](file:///c:/Users/Windows/Documents/cloud/START_PROJECT.bat)
-   - Verifies Python 3.10+ and Node.js 18+
-   - Resolves port conflicts on `8000` and `5173`
-   - Starts Backend API (`http://127.0.0.1:8000`) and Frontend Console (`http://127.0.0.1:5173`)
-   - Performs automated health checks and opens default web browser
-2. **Stop Platform**: Double-click [**`STOP_PROJECT.bat`**](file:///c:/Users/Windows/Documents/cloud/STOP_PROJECT.bat)
-3. **Restart Platform**: Double-click [**`RESTART_PROJECT.bat`**](file:///c:/Users/Windows/Documents/cloud/RESTART_PROJECT.bat)
+An automated multi-cloud security analysis platform that ingests, validates, and normalizes audit telemetry across AWS, Microsoft Azure, Google Cloud Platform (GCP), and Oracle Cloud Infrastructure (OCI). The system evaluates security threats using a trained Random Forest classifier, computes deterministic risk scores (0 to 100), and outputs compliance remediation mappings for NIST CSF 2.0, CIS Controls v8, and ISO/IEC 27001:2022.
 
 ---
 
-## 🏗️ System Architecture
+## 1. Quick Start
 
-```
-AWS / Azure / GCP / OCI Audit Telemetry
-                   │
-                   ▼
-       [Uniform Cloud Adapters]
-                   │
-                   ▼
-     [Canonical Event Schema (Pydantic)]
-                   │
-                   ▼
-  [Module 1: Ingestion & Validation]
-                   │
-                   ▼
- [Module 2: Feature Engineering (6-Dim)]
-                   │
-                   ▼
- [Module 3: Random Forest ML Classifier]
-                   │
-                   ▼
-   [Risk Scoring Engine: 0–100 Score]
-   [LOW / MEDIUM / HIGH / CRITICAL]
-                   │
-                   ▼
- [Compliance Mapping: NIST / CIS / ISO]
-                   │
-                   ▼
-  [Database & System Administration Log]
-                   │
-                   ▼
-[Real-Time Security Operations Dashboard]
+The platform runs locally on Windows without requiring external cloud accounts or paid third-party dependencies:
+
+1. **Start System**: Double-click [START_PROJECT.bat](file:///c:/Users/Windows/Documents/cloud/START_PROJECT.bat)
+   - Checks Python 3.10+ and Node.js 18+ environments
+   - Releases ports 8000 and 5173 if occupied
+   - Launches Backend API at http://127.0.0.1:8000
+   - Launches Frontend Console at http://127.0.0.1:5173
+   - Validates service health and opens default web browser
+2. **Stop System**: Double-click [STOP_PROJECT.bat](file:///c:/Users/Windows/Documents/cloud/STOP_PROJECT.bat)
+3. **Restart System**: Double-click [RESTART_PROJECT.bat](file:///c:/Users/Windows/Documents/cloud/RESTART_PROJECT.bat)
+
+---
+
+## 2. System Architecture
+
+```mermaid
+graph TD
+    A[Multi-Cloud Audit Logs: AWS / Azure / GCP / OCI] --> B[Cloud Adapters Layer]
+    B --> C[Canonical Event Schema: Pydantic Validation]
+    C --> D[Module 1: Ingestion & Batch Error Isolation]
+    D --> E[Module 2: Feature Engineering - 6 Features]
+    E --> F[Module 3: Random Forest Threat Classifier]
+    F --> G[Risk Scoring Engine: 0 to 100 Score]
+    G --> H[Compliance Mapping Engine: NIST / CIS / ISO]
+    H --> I[(SQLite / PostgreSQL Database)]
+    I --> J[React 18 Operations Dashboard]
 ```
 
 ---
 
-## 📂 Complete Documentation Index (`docs/`)
+## 3. Project Documentation Index
 
-The project documentation is organized into 27 structured references:
+The complete documentation suite is organized in the `docs/` directory:
 
-### System & Architecture
-1. [**01. Project Overview**](file:///c:/Users/Windows/Documents/cloud/docs/01_PROJECT_OVERVIEW.md) — Problem statement, scope, and implementation status.
-2. [**02. System Architecture**](file:///c:/Users/Windows/Documents/cloud/docs/02_SYSTEM_ARCHITECTURE.md) — Detailed pipeline architecture and Mermaid diagrams.
-3. [**03. Core Modules**](file:///c:/Users/Windows/Documents/cloud/docs/03_CORE_MODULES.md) — Deep-dive into Modules 1, 2, and 3.
-4. [**04. Data Pipeline**](file:///c:/Users/Windows/Documents/cloud/docs/04_DATA_PIPELINE.md) — Canonical event schema and normalization rules.
-5. [**05. ML & Risk Engine**](file:///c:/Users/Windows/Documents/cloud/docs/05_ML_AND_RISK_ENGINE.md) — Random Forest classifier, risk scoring, and compliance mappings.
-6. [**06. Multi-Cloud Architecture**](file:///c:/Users/Windows/Documents/cloud/docs/06_MULTI_CLOUD_ARCHITECTURE.md) — Common adapter interface and provider states.
+### Architecture and Core Modules
+- [01. Project Overview](file:///c:/Users/Windows/Documents/cloud/docs/01_PROJECT_OVERVIEW.md): Problem definition, research objectives, and module scopes.
+- [02. System Architecture](file:///c:/Users/Windows/Documents/cloud/docs/02_SYSTEM_ARCHITECTURE.md): Multi-tier architecture, component communication, and data boundaries.
+- [03. Core Modules](file:///c:/Users/Windows/Documents/cloud/docs/03_CORE_MODULES.md): Detailed specifications for Modules 1, 2, and 3.
+- [04. Data Pipeline](file:///c:/Users/Windows/Documents/cloud/docs/04_DATA_PIPELINE.md): Canonical Event Schema definition and cloud log mapping rules.
+- [05. ML and Risk Engine](file:///c:/Users/Windows/Documents/cloud/docs/05_ML_AND_RISK_ENGINE.md): Classifier training, feature engineering, and risk scoring equations.
+- [06. Multi-Cloud Architecture](file:///c:/Users/Windows/Documents/cloud/docs/06_MULTI_CLOUD_ARCHITECTURE.md): Adapter pattern interface and lifecycle state machine.
 
 ### Cloud Integration Guides
-7. [**07. AWS Setup Guide**](file:///c:/Users/Windows/Documents/cloud/docs/07_AWS_SETUP.md) — IAM permissions, STS identity, and CloudTrail setup.
-8. [**08. Azure Setup Guide**](file:///c:/Users/Windows/Documents/cloud/docs/08_AZURE_SETUP.md) — Microsoft Entra ID and Activity Log integration.
-9. [**09. GCP Setup Guide**](file:///c:/Users/Windows/Documents/cloud/docs/09_GCP_SETUP.md) — Service account key placement and Audit Log setup.
-10. [**10. OCI Setup & Demo Guide**](file:///c:/Users/Windows/Documents/cloud/docs/10_OCI_SETUP.md) — Oracle Cloud Infrastructure and Demo Mode.
+- [07. AWS Setup](file:///c:/Users/Windows/Documents/cloud/docs/07_AWS_SETUP.md): IAM read-only policies, STS identity validation, and CloudTrail ingestion.
+- [08. Azure Setup](file:///c:/Users/Windows/Documents/cloud/docs/08_AZURE_SETUP.md): Microsoft Entra ID app registration and Activity Log processing.
+- [09. GCP Setup](file:///c:/Users/Windows/Documents/cloud/docs/09_GCP_SETUP.md): Service account key configuration and Cloud Audit Log ingestion.
+- [10. OCI Setup](file:///c:/Users/Windows/Documents/cloud/docs/10_OCI_SETUP.md): Oracle Cloud Guard integration and verified Demo Mode stream.
 
-### Security, Auth & Tiers
-11. [**11. Credential Security**](file:///c:/Users/Windows/Documents/cloud/docs/11_CREDENTIAL_SECURITY.md) — Secrets classification, `.gitignore` rules, and zero-leakage controls.
-12. [**12. Authentication & RBAC**](file:///c:/Users/Windows/Documents/cloud/docs/12_AUTHENTICATION_AND_RBAC.md) — User roles (`ADMIN`, `ANALYST`, `USER`) and route protection.
-13. [**13. Free vs. Pro Features**](file:///c:/Users/Windows/Documents/cloud/docs/13_FREE_PRO_FEATURES.md) — Capability breakdown and server-side tier gating.
-14. [**14. Billing Architecture**](file:///c:/Users/Windows/Documents/cloud/docs/14_BILLING.md) — Webhook verification and mock checkout pipeline.
+### Security, Authentication, and Tiers
+- [11. Credential Security](file:///c:/Users/Windows/Documents/cloud/docs/11_CREDENTIAL_SECURITY.md): Secrets isolation, ignore rules, and zero-leakage policies.
+- [12. Authentication and RBAC](file:///c:/Users/Windows/Documents/cloud/docs/12_AUTHENTICATION_AND_RBAC.md): User roles (ADMIN, ANALYST, USER) and route-level protection.
+- [13. Free and Pro Features](file:///c:/Users/Windows/Documents/cloud/docs/13_FREE_PRO_FEATURES.md): Tier boundaries, access control, and upgrade workflows.
+- [14. Billing](file:///c:/Users/Windows/Documents/cloud/docs/14_BILLING.md): Cryptographic HMAC-SHA256 checkout simulation and webhook verification.
 
-### Operations & Diagnostics
-15. [**15. Real-Time Processing**](file:///c:/Users/Windows/Documents/cloud/docs/15_REAL_TIME_PROCESSING.md) — Continuous simulation vs. live cloud sync.
-16. [**16. Demo Mode & Scenarios**](file:///c:/Users/Windows/Documents/cloud/docs/16_DEMO_MODE.md) — 5 deterministic 1-click presentation scenarios.
-17. [**17. Dashboard & UI Guide**](file:///c:/Users/Windows/Documents/cloud/docs/17_DASHBOARD_AND_UI.md) — Frontend layout, metrics ribbon, and deep inspector.
-18. [**18. REST API Reference**](file:///c:/Users/Windows/Documents/cloud/docs/18_API_DOCUMENTATION.md) — Endpoints, request schemas, and responses.
-19. [**19. Database Reference**](file:///c:/Users/Windows/Documents/cloud/docs/19_DATABASE.md) — Entity relationships, SQLite models, and migrations.
-20. [**20. Security Posture**](file:///c:/Users/Windows/Documents/cloud/docs/20_SECURITY.md) — Defensive controls, least privilege, and limitations.
+### Operations and UI
+- [15. Real-Time Processing](file:///c:/Users/Windows/Documents/cloud/docs/15_REAL_TIME_PROCESSING.md): Continuous event simulation and live provider synchronization.
+- [16. Demo Mode](file:///c:/Users/Windows/Documents/cloud/docs/16_DEMO_MODE.md): Deterministic test scenarios for brute-force, unauthorized access, and normal events.
+- [17. Dashboard and UI](file:///c:/Users/Windows/Documents/cloud/docs/17_DASHBOARD_AND_UI.md): Operations console layout, metrics ribbon, and deep event inspector.
+- [18. API Documentation](file:///c:/Users/Windows/Documents/cloud/docs/18_API_DOCUMENTATION.md): FastAPI REST endpoints, request schemas, and response formats.
+- [19. Database](file:///c:/Users/Windows/Documents/cloud/docs/19_DATABASE.md): Schema definitions, entity relationships, and automated SQLite migrations.
+- [20. Security Posture](file:///c:/Users/Windows/Documents/cloud/docs/20_SECURITY.md): Vulnerability analysis, input validation, and defensive mitigations.
 
-### Verification & Operations
-21. [**21. Testing & Validation**](file:///c:/Users/Windows/Documents/cloud/docs/21_TESTING_AND_VALIDATION.md) — 27 automated tests report and test coverage.
-22. [**22. Git & GitHub Guidelines**](file:///c:/Users/Windows/Documents/cloud/docs/22_GIT_AND_GITHUB.md) — Pre-commit security checklist and commit hygiene.
-23. [**23. Deployment Guide**](file:///c:/Users/Windows/Documents/cloud/docs/23_DEPLOYMENT.md) — Local vs. containerized production deployment.
-24. [**24. Run & Operations Guide**](file:///c:/Users/Windows/Documents/cloud/docs/24_RUN_GUIDE.md) — Detailed operational instructions.
-25. [**25. Troubleshooting Guide**](file:///c:/Users/Windows/Documents/cloud/docs/25_TROUBLESHOOTING.md) — Common errors, port conflicts, and resolutions.
-26. [**26. Implementation Status**](file:///c:/Users/Windows/Documents/cloud/docs/26_IMPLEMENTATION_STATUS.md) — Definitive single source of truth matrix.
-27. [**27. Presentation Guide**](file:///c:/Users/Windows/Documents/cloud/docs/27_PRESENTATION_GUIDE.md) — 5–8 minute professor demonstration script.
+### Verification and Project Management
+- [21. Testing and Validation](file:///c:/Users/Windows/Documents/cloud/docs/21_TESTING_AND_VALIDATION.md): Automated pytest suite coverage and frontend build validation.
+- [22. Git and GitHub Guidelines](file:///c:/Users/Windows/Documents/cloud/docs/22_GIT_AND_GITHUB.md): Repository hygiene, pre-commit checklist, and secret protection.
+- [23. Deployment](file:///c:/Users/Windows/Documents/cloud/docs/23_DEPLOYMENT.md): Local execution parameters and production containerization.
+- [24. Run Guide](file:///c:/Users/Windows/Documents/cloud/docs/24_RUN_GUIDE.md): Execution reference for Windows batch scripts.
+- [25. Troubleshooting](file:///c:/Users/Windows/Documents/cloud/docs/25_TROUBLESHOOTING.md): Common error resolutions for ports, dependencies, and credentials.
+- [26. Implementation Status](file:///c:/Users/Windows/Documents/cloud/docs/26_IMPLEMENTATION_STATUS.md): Single source of truth implementation matrix.
+- [27. Presentation Guide](file:///c:/Users/Windows/Documents/cloud/docs/27_PRESENTATION_GUIDE.md): Structured 5 to 8 minute demonstration script for academic evaluation.
 
 ---
 
-## 🧪 Testing
+## 4. Automated Testing
 
-Run the automated test suite:
+Run the automated test suite with pytest:
+
 ```bash
 pytest tests/
 ```
-All **27 unit and integration tests** pass with 100% success rate.
+
+Test Results: 27 passed, 0 failed across cloud adapters, pipeline stages, and REST endpoints.

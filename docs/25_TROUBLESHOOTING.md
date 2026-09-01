@@ -1,49 +1,50 @@
-# 25. Troubleshooting & Error Resolution Guide
+# 25. Troubleshooting and Error Resolution Guide
 
-This guide provides practical resolutions for common startup, dependency, and cloud connectivity issues.
+## Purpose
+This document provides diagnostic resolutions for common port conflicts, environment issues, and credential errors.
 
 ---
 
 ## 1. Port Conflicts
 
-### Problem: Port 8000 or 5173 is already in use
-- **Cause**: A previous instance of the project was not cleanly terminated.
-- **Solution**: Double-click `STOP_PROJECT.bat` or run:
+### Port 8000 or 5173 is already in use
+- **Cause**: A previous process was not cleanly terminated.
+- **Resolution**: Double-click `STOP_PROJECT.bat` or run:
   ```powershell
   Get-NetTCPConnection -LocalPort 8000,5173 | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }
   ```
 
 ---
 
-## 2. Environment & Dependency Issues
+## 2. Environment and Dependencies
 
-### Problem: `Python was not found`
-- **Cause**: Python 3.10+ is missing or not configured in system PATH.
-- **Solution**: Install Python 3.10+ from `python.org` and check **"Add Python to PATH"**.
+### Python was not found
+- **Cause**: Python 3.10+ is missing from the system PATH.
+- **Resolution**: Install Python 3.10+ from python.org and ensure "Add Python to PATH" is selected.
 
-### Problem: `Node.js was not found`
+### Node.js was not found
 - **Cause**: Node.js is missing.
-- **Solution**: Install Node.js LTS (18+) from `nodejs.org`.
+- **Resolution**: Install Node.js LTS (v18+) from nodejs.org.
 
 ---
 
-## 3. Cloud Authentication Failures
+## 3. Cloud Provider Authentication
 
-### Problem: AWS returns `InvalidClientTokenId`
-- **Cause**: AWS credentials in `.env` are invalid or deactivated.
-- **Solution**: Verify credentials via `python scripts/check_cloud_credentials.py` and update `.env`.
+### AWS: `InvalidClientTokenId`
+- **Cause**: The access key in `.env` is invalid or deactivated.
+- **Resolution**: Run `python scripts/check_cloud_credentials.py` and update `.env`.
 
-### Problem: Azure returns `AADSTS7000215`
-- **Cause**: Azure client secret has expired or was mistyped.
-- **Solution**: Generate a new secret in Microsoft Entra ID and update `AZURE_CLIENT_SECRET`.
+### Azure: `AADSTS7000215`
+- **Cause**: Azure client secret has expired or is incorrect.
+- **Resolution**: Create a new secret in Microsoft Entra ID and update `AZURE_CLIENT_SECRET`.
 
-### Problem: GCP returns `FileNotFoundError: credentials/...`
-- **Cause**: Service account JSON key not placed in the exact specified path.
-- **Solution**: Place JSON key under `credentials/gcp-service-account.json`.
+### GCP: `FileNotFoundError: credentials/...`
+- **Cause**: The service account JSON key is not located in the expected directory.
+- **Resolution**: Place the key at `credentials/gcp-service-account.json`.
 
 ---
 
-## 4. Operational Fallback
+## 4. Offline Fallback
 
-### Problem: No internet or cloud credentials available
-- **Solution**: Set `DEMO_MODE=true` in `.env`. The system will operate 100% locally with synthetic multi-cloud security streams.
+### No Internet or Cloud Credentials Available
+- **Resolution**: Set `DEMO_MODE=true` in `.env`. The system operates entirely offline with synthetic multi-cloud security telemetry.

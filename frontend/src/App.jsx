@@ -798,7 +798,7 @@ function App() {
                   <span className={`w-1.5 h-1.5 rounded-full ${isSimulating ? 'bg-emerald-500 animate-pulse' : 'bg-slate-500'}`} />
                   {isSimulating ? "CONTINUOUS STREAM ACTIVE" : "STANDBY"}
                 </span>
-                {activeUser?.role !== 'ADMIN' && <span className="text-amber-500 font-bold">🔒 STREAM LOCKED (ADMIN ONLY)</span>}
+                {activeUser?.role !== 'ADMIN' && <span className="text-amber-500 font-bold">[LOCKED] STREAM RESTRICTED TO ADMIN</span>}
               </div>
 
               {/* Scrolling event logs */}
@@ -859,7 +859,7 @@ function App() {
                         
                         {activeUser?.role === 'USER' ? (
                           <div className="console-code-block text-slate-500 italic text-center py-8">
-                            🔒 Access Denied: User role requires Analyst or Admin permission to inspect raw audit JSON records.
+                            Access Denied: User role requires Analyst or Admin permission to inspect raw audit JSON records.
                           </div>
                         ) : (
                           <div className="console-code-block">
@@ -1248,7 +1248,7 @@ function App() {
                   </button>
                   {activeUser?.role !== 'ADMIN' && (
                     <span className="text-[10px] text-amber-500 font-mono mt-1.5 block text-center">
-                      🔒 Retraining locked: ADMIN role required.
+                      Retraining locked: ADMIN role required.
                     </span>
                   )}
                 </div>

@@ -219,7 +219,9 @@ Subscription checks are enforced at the API gateway layer to prevent client-side
     "detail": "Multi-cloud adapters require Pro subscription. Upgrade at the Billing tab."
   }
   ```
-* **Pro Tier**: Unlocks all adapters (`aws`, `azure`, `gcp`, `oci`) and enables advanced anomaly detection features.
+* **Pro Tier**: Enables all adapters (`aws`, `azure`, `gcp`, `oci`) and enables advanced anomaly detection features.
+* **Feature Gating**: Attempting multi-cloud sync on Free tier returns HTTP 403.
+* **Mock Checkout & Webhook**: Cryptographically verified subscription workflow using HMAC-SHA256 signatures. Entitlement granted instantly upon verification.
 
 ---
 
@@ -243,7 +245,7 @@ Signature Verification (SHA-256 validation of payment ID)
  ↓
 Update system_users set is_pro = 1
  ↓
-Entitlement unlocked instantly
+Entitlement activated instantly
 ```
 
 ### 6.1 Webhook Authenticity

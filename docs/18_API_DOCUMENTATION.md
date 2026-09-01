@@ -1,14 +1,15 @@
-# 18. REST API Reference & Endpoint Documentation
+# 18. REST API Reference
 
-The FastAPI backend exposes RESTful endpoints at `http://127.0.0.1:8000/api/v1/`. Interactive Swagger UI documentation is available at `http://127.0.0.1:8000/docs`.
+## Purpose
+This document provides the specification for all REST API endpoints exposed by the FastAPI backend at `http://127.0.0.1:8000/api/v1/`.
 
 ---
 
-## 1. System Health & Cloud Endpoints
+## 1. System Health and Cloud Endpoints
 
 ### `GET /api/v1/health`
-- **Purpose**: Returns backend health status and safe cloud summary.
-- **Auth**: Public
+- **Purpose**: System health status and non-sensitive cloud provider overview.
+- **Authentication**: None.
 - **Response**:
 ```json
 {
@@ -26,60 +27,60 @@ The FastAPI backend exposes RESTful endpoints at `http://127.0.0.1:8000/api/v1/`
 
 ### `GET /api/v1/cloud/status?refresh={bool}`
 - **Purpose**: Returns real-time connection status and metrics for all cloud adapters.
-- **Auth**: User Header `X-User-ID`
+- **Header**: `X-User-ID`
 
 ### `POST /api/v1/cloud/test-connection/{provider}`
-- **Purpose**: Executes live credential validation for `aws`, `azure`, `gcp`, or `oci`.
-- **Auth**: User Header `X-User-ID`
+- **Purpose**: Runs live credential verification for `aws`, `azure`, `gcp`, or `oci`.
+- **Header**: `X-User-ID`
 
 ### `POST /api/v1/cloud/sync/{provider}?limit={int}`
-- **Purpose**: Pulls and normalizes audit logs from the specified cloud provider.
-- **Auth**: Pro Tier / Admin (`X-User-ID`)
+- **Purpose**: Ingests audit logs from the specified cloud provider.
+- **Access**: Pro Tier or Admin (`X-User-ID`)
 
 ---
 
 ## 2. Pipeline Execution Endpoints
 
 ### `POST /api/v1/pipeline/run`
-- **Purpose**: Ingests a raw security event dictionary through Modules 1, 2, 3, Risk Engine, and Compliance mapping.
-- **Auth**: User Header `X-User-ID` (Pro tier required for non-AWS events).
+- **Purpose**: Ingests and processes a security event dictionary through Modules 1, 2, 3, and the Risk Engine.
+- **Access**: Free Tier for AWS; Pro Tier for Azure, GCP, and OCI.
 
 ### `POST /api/v1/pipeline/demo-scenario/{scenario_name}`
-- **Purpose**: Ingests deterministic presentation scenario (`aws_brute_force`, `azure_keyvault`, `gcp_storage_burst`, `oci_normal`, `aws_normal`).
-- **Auth**: User Header `X-User-ID`
+- **Purpose**: Ingests one of 5 deterministic presentation scenarios.
+- **Header**: `X-User-ID`
 
 ### `POST /api/v1/pipeline/simulate-next`
-- **Purpose**: Ingests a random sampled event from `security_events_eval.csv`.
-- **Auth**: Admin (`role == "ADMIN"`)
+- **Purpose**: Pulls and evaluates a sampled event from `security_events_eval.csv`.
+- **Access**: Admin Role (`usr_admin`)
 
 ---
 
-## 3. Threat Alerts & Diagnostics
+## 3. Alerts and Model Management
 
 ### `GET /api/v1/alerts?limit={int}`
-- **Purpose**: Returns list of evaluated security alerts with risk scores and compliance recommendations.
-- **Auth**: User Header `X-User-ID`
+- **Purpose**: Retrieves evaluated alerts with risk scores and compliance recommendations.
+- **Header**: `X-User-ID`
 
 ### `GET /api/v1/model/metrics`
-- **Purpose**: Returns Random Forest classifier accuracy, macro F1, confusion matrix, and feature importances.
-- **Auth**: User Header `X-User-ID`
+- **Purpose**: Returns accuracy, macro F1, confusion matrix, and feature importances.
+- **Header**: `X-User-ID`
 
 ### `POST /api/v1/model/train`
-- **Purpose**: Retrains and persists the Random Forest classifier on disk.
-- **Auth**: Admin (`role == "ADMIN"`)
+- **Purpose**: Retrains and persists the Random Forest model to disk.
+- **Access**: Admin Role (`usr_admin`)
 
 ---
 
-## 4. Admin & Billing Endpoints
+## 4. Administration and Billing
 
 ### `GET /api/v1/admin/audit-logs`
-- **Purpose**: Returns system administrative audit trail.
-- **Auth**: Admin (`role == "ADMIN"`, 403 Forbidden for others).
+- **Purpose**: Returns system administrative audit logs.
+- **Access**: Admin Role (`usr_admin`, HTTP 403 for other roles).
 
 ### `POST /api/v1/billing/checkout`
-- **Purpose**: Creates a mock subscription upgrade order.
-- **Auth**: User Header `X-User-ID`
+- **Purpose**: Generates a mock subscription upgrade order.
+- **Header**: `X-User-ID`
 
 ### `POST /api/v1/billing/webhook`
-- **Purpose**: Processes cryptographically verified upgrade webhook.
-- **Headers**: `X-Mock-Signature: <hex_hmac>`
+- **Purpose**: Validates HMAC-SHA256 signature and upgrades user to Pro tier.
+- **Header**: `X-Mock-Signature: <hex_hmac>`

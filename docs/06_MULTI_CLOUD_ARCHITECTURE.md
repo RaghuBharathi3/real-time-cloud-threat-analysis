@@ -1,67 +1,61 @@
-# 06. Multi-Cloud Architecture & Adapter Pattern
+# 06. Multi-Cloud Architecture and Adapter Pattern
 
-## 1. Uniform Adapter Architecture
+## Purpose
+This document describes the design of the cloud adapters layer, the `BaseCloudAdapter` interface, and the lifecycle status engine for multi-cloud integrations.
 
-To prevent vendor lock-in and decouple provider specifics from the core ML engine, all cloud connectors implement the unified `BaseCloudAdapter` interface.
+---
 
-```
-                  ┌──────────────────────┐
-                  │   BaseCloudAdapter   │
-                  │   (Abstract Base)    │
-                  └──────────┬───────────┘
-                             │
-       ┌─────────────────────┼─────────────────────┬─────────────────────┐
-       │                     │                     │                     │
-┌──────▼──────┐       ┌──────▼──────┐       ┌──────▼──────┐       ┌──────▼──────┐
-│ AWSAdapter  │       │AzureAdapter │       │ GCPAdapter  │       │ OCIAdapter  │
-└─────────────┘       └─────────────┘       └─────────────┘       └─────────────┘
+## 1. Adapter Design Pattern
+
+The platform uses the Adapter Pattern to isolate cloud provider specifics from the core validation and machine learning pipeline.
+
+```mermaid
+classDiagram
+    class BaseCloudAdapter {
+        +str provider_name
+        +str last_status
+        +int events_collected_count
+        +int threats_flagged_count
+        +connect() bool*
+        +validate_credentials() Dict*
+        +get_connection_status() Dict*
+        +collect_events(int limit) List*
+        +normalize_event(Dict raw) Dict*
+    }
+    class AWSAdapter {
+        +boto3.client sts_client
+        +boto3.client cloudtrail_client
+    }
+    class AzureAdapter {
+        +ClientSecretCredential credential
+    }
+    class GCPAdapter {
+        +Credentials service_account
+    }
+    class OCIAdapter {
+        +bool demo_mode
+    }
+    BaseCloudAdapter <|-- AWSAdapter
+    BaseCloudAdapter <|-- AzureAdapter
+    BaseCloudAdapter <|-- GCPAdapter
+    BaseCloudAdapter <|-- OCIAdapter
 ```
 
 ---
 
-## 2. Common Adapter Interface (`BaseCloudAdapter`)
+## 2. Adapter State Machine
 
-Defined in `backend/app/adapters/base.py`:
+Each cloud adapter operates within one of four well-defined lifecycle states:
 
-```python
-class BaseCloudAdapter(ABC):
-    def __init__(self, provider_name: str):
-        self.provider_name = provider_name
-        self.last_status = "NOT CONFIGURED"
-        self.events_collected_count = 0
-        self.threats_flagged_count = 0
-
-    @abstractmethod
-    def connect(self) -> bool: ...
-
-    @abstractmethod
-    def validate_credentials(self) -> Dict[str, Any]: ...
-
-    @abstractmethod
-    def get_connection_status(self) -> Dict[str, Any]: ...
-
-    @abstractmethod
-    def collect_events(self, limit: int = 10) -> List[Dict[str, Any]]: ...
-
-    @abstractmethod
-    def normalize_event(self, raw_event: Dict[str, Any]) -> Dict[str, Any]: ...
-```
-
----
-
-## 3. Provider Status Lifecycle
-
-The system accurately distinguishes between 4 provider lifecycle states:
-
-| Status Code | Meaning | System Behavior |
+| Status Value | Meaning | Pipeline Behavior |
 | :--- | :--- | :--- |
-| `CONNECTED` | Credentials valid, identity confirmed via cloud STS / OAuth token. | Pulls live cloud audit telemetry and normalizes into pipeline. |
-| `DEMO MODE` | Provider configured in simulation mode (e.g. OCI). | Ingests verified deterministic telemetry through the real ML pipeline. |
-| `NOT CONFIGURED` | Environment variables or key files are missing. | Displays placeholder badge; does not block remaining cloud adapters. |
-| `FAILED` | Authentication error or network failure. | Catches error, isolates provider, and logs diagnostic message. |
+| `CONNECTED` | Authentication succeeded and identity verified. | Ingests live telemetry from cloud provider APIs. |
+| `DEMO MODE` | Provider configured in simulation mode. | Ingests verified deterministic event streams through the ML pipeline. |
+| `NOT CONFIGURED` | Required credentials or environment variables missing. | Displays unconfigured status in UI; does not block other adapters. |
+| `FAILED` | Authentication error or network exception. | Catches error, isolates provider, and records failure in diagnostic logs. |
 
 ---
 
-## 4. Multi-Cloud Status Aggregation
+## 3. Status Aggregation
 
-The registry (`backend/app/adapters/__init__.py`) exposes `get_multi_cloud_status(refresh=False)` which computes aggregate health across all 4 adapters without exposing private keys, secret strings, or tokens.
+The adapter registry (`backend/app/adapters/__init__.py`) exposes `get_multi_cloud_status(refresh=False)`. This function queries all registered adapters, builds a sanitized status summary, and returns it to the API layer without exposing private keys, secret strings, or tokens.

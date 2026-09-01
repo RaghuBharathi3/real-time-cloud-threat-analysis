@@ -1,10 +1,11 @@
-# Multi-Cloud Credential Setup & IAM Permissions
+# Multi-Cloud Credential Setup and IAM Permissions
 
+## Purpose
 This document summarizes the required parameters and minimum read-only permissions for configuring AWS, Azure, GCP, and OCI.
 
 ---
 
-## 1. Provider Parameters & Permissions
+## 1. Provider Parameters and Permissions
 
 ### 1.1 Amazon Web Services (AWS)
 - **Parameters**: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `AWS_ACCOUNT_ID`
@@ -40,9 +41,6 @@ This document summarizes the required parameters and minimum read-only permissio
 
 ---
 
-## 2. Strict Security Mandate
-
-> [!CAUTION]
-> **Zero Credential Exposure**:
-> - Never commit access keys, client secrets, private keys, or service account JSON files to Git.
-> - `.gitignore` excludes all credential files from source control.
+## 2. Credential Security Policy
+- Never commit access keys, client secrets, private keys, or service account JSON files to version control.
+- `.gitignore` excludes all credential files and `.env` files from Git commits.

@@ -1,10 +1,11 @@
-# 22. Git Workflow & GitHub Security Guidelines
+# 22. Git Workflow and Repository Security
 
-This guide describes repository management, commit hygiene, and secret protection procedures.
+## Purpose
+This document specifies Git repository hygiene, pre-commit security verification, and credential protection rules.
 
 ---
 
-## 1. Repository Structure
+## 1. Repository File Structure
 
 ```text
 PROJECT_ROOT/
@@ -24,7 +25,7 @@ PROJECT_ROOT/
 │   │   └── main.py
 │   ├── models/
 │   └── requirements.txt
-├── credentials/          <-- [GIT IGNORED]
+├── credentials/          [GIT IGNORED]
 ├── data/
 │   └── raw/
 ├── docs/
@@ -32,7 +33,7 @@ PROJECT_ROOT/
 │   ├── src/
 │   ├── package.json
 │   └── vite.config.js
-├── logs/                 <-- [GIT IGNORED]
+├── logs/                 [GIT IGNORED]
 ├── scripts/
 └── tests/
 ```
@@ -41,14 +42,14 @@ PROJECT_ROOT/
 
 ## 2. Pre-Commit Security Checklist
 
-Before committing or pushing to GitHub, run the following verification checklist:
+Before committing changes, execute this verification procedure:
 
-1. **Verify Ignored Secret Files**:
+1. **Check Status**:
    ```bash
    git status
    ```
-   Ensure `.env`, `credentials/`, `*.db`, and `logs/` are **NOT** listed in staged or untracked files.
-2. **Test File Exclusion**:
+   Verify that `.env`, `credentials/`, `*.db`, and `logs/` are not listed.
+2. **Verify Ignore Rules**:
    ```bash
    git check-ignore .env credentials/gcp-service-account.json
    ```
@@ -56,16 +57,16 @@ Before committing or pushing to GitHub, run the following verification checklist
    ```bash
    pytest tests/
    ```
-4. **Build Frontend**:
+4. **Validate Frontend Build**:
    ```bash
    npm run build --prefix frontend
    ```
 
 ---
 
-## 3. Incident Procedure (Accidental Exposure)
+## 3. Accidental Secret Exposure Remediation
 
-If a secret is ever accidentally staged or pushed:
-1. **Immediately Rotate Key**: Deactivate the compromised key in AWS/Azure/GCP console and issue a new one.
-2. **Remove from Git History**: Use `git filter-repo` or BFG Repo-Cleaner.
-3. **Never simply make a new commit** that deletes the file, as it remains in git history.
+If a secret is ever committed:
+1. Immediately rotate the compromised credential in the cloud provider console.
+2. Purge the secret from Git history using `git filter-repo` or BFG Repo-Cleaner.
+3. Creating a new commit that simply deletes the file is insufficient because Git history retains prior versions.

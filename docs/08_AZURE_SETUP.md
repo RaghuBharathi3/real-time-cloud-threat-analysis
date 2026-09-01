@@ -1,48 +1,40 @@
-# 08. Microsoft Azure Setup Guide
+# 08. Microsoft Azure Setup
 
-This guide details the setup for authenticating against Microsoft Entra ID and the Azure Resource Manager / Graph APIs.
+## Purpose
+This document provides instructions for configuring Microsoft Entra ID application credentials to enable Azure log ingestion.
 
 ---
 
 ## 1. Prerequisites
-- Active Azure Subscription or Microsoft Entra ID Tenant
-- Permission to register Applications in Microsoft Entra ID (`portal.azure.com`).
+- Active Microsoft Azure subscription or Microsoft Entra ID tenant.
+- Permissions to register applications in Microsoft Entra ID (`portal.azure.com`).
 
 ---
 
-## 2. Configuration Steps
+## 2. Configuration Procedure
 
-### Step 1: Register an App in Microsoft Entra ID
-1. Navigate to **Microsoft Entra ID** $\rightarrow$ **App registrations** $\rightarrow$ **New registration**.
-2. Name: `CloudSecurityPlatform`.
-3. Supported account types: Select your tenant type (Single tenant or Multitenant / Personal Microsoft accounts).
-4. Register the application.
-
-### Step 2: Obtain Tenant and Client IDs
-Copy the following identifiers from the **Overview** page:
-- **Application (client) ID**
-- **Directory (tenant) ID**
-
-### Step 3: Create a Client Secret
-1. Navigate to **Certificates & secrets** $\rightarrow$ **Client secrets** $\rightarrow$ **New client secret**.
-2. Set an expiration period and click **Add**.
-3. Copy the **Value** string immediately.
-
-### Step 4: Configure Environment Variables
-Add the following entries to `.env`:
-
-```ini
-AZURE_CLIENT_ID=<YOUR_AZURE_CLIENT_ID>
-AZURE_TENANT_ID=<YOUR_AZURE_TENANT_ID>
-AZURE_SUBSCRIPTION_ID=<YOUR_AZURE_SUBSCRIPTION_ID_OPTIONAL>
-AZURE_CLIENT_SECRET=<YOUR_AZURE_CLIENT_SECRET>
-```
+1. **Register Application**:
+   - In Microsoft Entra ID, navigate to **App registrations** -> **New registration**.
+   - Set Name to `CloudSecurityPlatform`.
+2. **Collect Tenant and Client IDs**:
+   - Record the **Application (client) ID** and **Directory (tenant) ID**.
+3. **Generate Client Secret**:
+   - Navigate to **Certificates & secrets** -> **New client secret**.
+   - Copy the secret string Value immediately.
+4. **Configure Environment**:
+   Add the following variables to `.env`:
+   ```ini
+   AZURE_CLIENT_ID=<YOUR_AZURE_CLIENT_ID>
+   AZURE_TENANT_ID=<YOUR_AZURE_TENANT_ID>
+   AZURE_SUBSCRIPTION_ID=<YOUR_AZURE_SUBSCRIPTION_ID_OPTIONAL>
+   AZURE_CLIENT_SECRET=<YOUR_AZURE_CLIENT_SECRET>
+   ```
 
 ---
 
-## 3. Testing the Connection
+## 3. Verification
 
-Run the diagnostic CLI:
+Run the verification tool:
 ```bash
 python scripts/check_cloud_credentials.py
 ```
@@ -56,8 +48,8 @@ Expected output:
 
 ## 4. Troubleshooting
 
-| Issue | Cause | Solution |
+| Error Code | Root Cause | Resolution |
 | :--- | :--- | :--- |
-| `AADSTS7000215: Invalid client secret` | Client secret has expired or was mistyped. | Generate a new secret in Entra ID and update `.env`. |
-| `AADSTS9002346: Use /consumers endpoint` | App is registered for Personal Microsoft Accounts. | Handled automatically by the built-in AzureAdapter fallback. |
-| `AuthorizationFailed (ARM)` | Service principal lacks Reader role on subscription. | Assign `Reader` role on target Subscription or Resource Group. |
+| `AADSTS7000215: Invalid client secret` | Client secret expired or mistyped. | Generate a new secret in Entra ID and update `.env`. |
+| `AADSTS9002346` | App configured for Personal Microsoft Accounts. | Handled automatically by the built-in AzureAdapter fallback. |
+| `AuthorizationFailed (ARM)` | Service principal lacks Reader role on subscription. | Assign `Reader` role on the target Azure Subscription. |

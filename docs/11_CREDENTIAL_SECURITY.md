@@ -1,19 +1,18 @@
-# 11. Credential Security & DevSecOps Posture
+# 11. Credential Security and Zero-Leakage Policy
 
-This document defines the secrets isolation controls, environment configuration boundaries, and zero-leakage security posture enforced in the repository.
+## Purpose
+This document specifies secrets management controls, environment boundary definitions, and Git ignore policies enforced in the project.
 
 ---
 
-## 1. Secrets Classification & Boundary Control
-
-Configuration variables are classified into three strict tiers:
+## 1. Secrets Classification
 
 ```
 ┌────────────────────────────────────────────────────────┐
 │ 1. Public Variables (Safe for Frontend / VITE_)       │
 │    DEMO_MODE, AWS_REGION, GOOGLE_PROJECT_ID            │
 ├────────────────────────────────────────────────────────┤
-│ 2. Server-Only Variables (Backend execution only)      │
+│ 2. Server-Only Variables (Backend runtime only)       │
 │    DATABASE_URL                                        │
 ├────────────────────────────────────────────────────────┤
 │ 3. Highly Sensitive Secrets (Never sent over network)  │
@@ -24,25 +23,28 @@ Configuration variables are classified into three strict tiers:
 
 ---
 
-## 2. Git Protection & Ignore Rules
+## 2. Git Protection Rules
 
-The `.gitignore` file enforces comprehensive filters preventing secret leakage into version control:
+The `.gitignore` file enforces comprehensive filters preventing sensitive files from being committed:
 
 ```gitignore
-# Environment & Secret files
+# Environment and secrets
 .env
 .env.*
 !.env.example
 !.env.production.example
 
-# Credentials & Service Accounts
+# Credentials and key files
 credentials/
+secrets/
 *.pem
 *.key
-*service-account*.json
+*.p12
+*.pfx
 *credentials*.json
+*service-account*.json
 
-# Local Databases & Logs
+# Databases and process logs
 *.db
 logs/
 .pids/
@@ -50,9 +52,8 @@ logs/
 
 ---
 
-## 3. Defense-in-Depth Measures
+## 3. Defense-in-Depth Controls
 
-1. **Frontend Isolation**: The React/Vite client contains **zero** cloud credentials or private keys. The frontend communicates exclusively with the FastAPI backend via `/api/v1/` endpoints.
-2. **API Response Sanitization**: Endpoints such as `GET /api/v1/cloud/status` and `GET /api/v1/health` return state flags (`CONNECTED`, `CONFIGURED`, `DEMO MODE`) and non-sensitive identifiers (e.g. Region, Project ID), omitting secrets entirely.
-3. **Logging & Diagnostic Masking**: The diagnostic CLI and backend logs never echo private keys, passwords, or secret strings during authentication or validation.
-4. **Credential Rotation Policy**: In production deployments, IAM access keys and service account JSON credentials should be rotated every 90 days.
+1. **Client Isolation**: The React/Vite frontend contains zero cloud credentials or private keys. All cloud operations are proxied through FastAPI backend endpoints.
+2. **Sanitized API Responses**: Endpoints such as `GET /api/v1/cloud/status` and `GET /api/v1/health` return boolean status flags and identifiers (such as Region and Project ID), omitting secrets entirely.
+3. **Log Masking**: Backend logging and the diagnostic CLI tool never echo secret strings, tokens, or private key contents to stdout or log files.

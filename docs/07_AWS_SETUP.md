@@ -1,47 +1,39 @@
-# 07. Amazon Web Services (AWS) Setup Guide
+# 07. Amazon Web Services (AWS) Setup
 
-This guide describes how to configure read-only AWS IAM credentials for the multi-cloud security platform.
+## Purpose
+This document provides instructions for configuring read-only IAM credentials to connect the platform to AWS.
 
 ---
 
 ## 1. Prerequisites
-- Active AWS Account
-- IAM administrative permissions to create a read-only IAM User or Role.
+- Active AWS account.
+- Permissions to create IAM users and attach read-only policies.
 
 ---
 
-## 2. Configuration Steps
+## 2. Configuration Procedure
 
-### Step 1: Create a Dedicated IAM User
-1. Open the **AWS IAM Console** (`https://console.aws.amazon.com/iam`).
-2. Navigate to **Users** $\rightarrow$ **Create User**.
-3. Set the username (e.g. `cloud-security-analyst`).
-
-### Step 2: Assign Minimum Least-Privilege Permissions
-Attach the following AWS managed policies for read-only audit access:
-- `AWSCloudTrail_ReadOnlyAccess`
-- `SecurityAudit`
-
-### Step 3: Generate Access Keys
-1. Under the user's **Security credentials** tab, select **Create access key**.
-2. Select **Application running outside AWS**.
-3. Save the **Access Key ID** and **Secret Access Key**.
-
-### Step 4: Configure Environment Variables
-Add the following entries to `.env` in the project root:
-
-```ini
-AWS_ACCESS_KEY_ID=<YOUR_AWS_ACCESS_KEY_ID>
-AWS_SECRET_ACCESS_KEY=<YOUR_AWS_SECRET_ACCESS_KEY>
-AWS_REGION=ap-south-1
-AWS_ACCOUNT_ID=<YOUR_AWS_ACCOUNT_ID_OPTIONAL>
-```
+1. **Create IAM User**:
+   - In AWS IAM Console, create a service user (e.g., `cloud-security-reader`).
+2. **Attach Managed Read-Only Policies**:
+   - Attach `AWSCloudTrail_ReadOnlyAccess`.
+   - Attach `SecurityAudit`.
+3. **Generate Access Keys**:
+   - Create an Access Key ID and Secret Access Key under Security Credentials.
+4. **Configure Environment**:
+   Add the following variables to `.env`:
+   ```ini
+   AWS_ACCESS_KEY_ID=<YOUR_AWS_ACCESS_KEY_ID>
+   AWS_SECRET_ACCESS_KEY=<YOUR_AWS_SECRET_ACCESS_KEY>
+   AWS_REGION=ap-south-1
+   AWS_ACCOUNT_ID=<YOUR_AWS_ACCOUNT_ID_OPTIONAL>
+   ```
 
 ---
 
-## 3. Testing the Connection
+## 3. Verification
 
-Run the diagnostic verification tool:
+Run the credential verification script:
 ```bash
 python scripts/check_cloud_credentials.py
 ```
@@ -55,8 +47,8 @@ Expected output:
 
 ## 4. Troubleshooting
 
-| Issue | Cause | Solution |
+| Error Code | Root Cause | Resolution |
 | :--- | :--- | :--- |
-| `InvalidClientTokenId` | Access key is mistyped or deactivated. | Verify `.env` access key string in AWS IAM Console. |
-| `SignatureDoesNotMatch`| Secret key contains invalid characters or truncation. | Re-generate AWS Access Key pair and update `.env`. |
-| `AccessDenied on STS` | IAM user policy restricts STS caller identity. | Ensure `sts:GetCallerIdentity` is permitted. |
+| `InvalidClientTokenId` | Access key string is invalid or disabled. | Verify credentials in AWS IAM Console. |
+| `SignatureDoesNotMatch` | Secret key contains typos or truncation. | Re-generate access key pair and update `.env`. |
+| `AccessDenied on STS` | Caller identity check blocked by SCP or IAM boundary. | Ensure `sts:GetCallerIdentity` is permitted. |

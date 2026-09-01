@@ -1,35 +1,35 @@
-# 23. Deployment & Production Architecture
+# 23. Deployment and Runtime Architecture
 
-This document describes options for running the application locally and deploying to production cloud environments.
-
----
-
-## 1. Local Deployment (Primary Recommendation)
-
-For evaluation and testing, run locally using the provided Windows launchers:
-- Double-click `START_PROJECT.bat` to launch both Backend API (Port 8000) and Frontend Console (Port 5173).
-- To stop: Double-click `STOP_PROJECT.bat`.
+## Purpose
+This document specifies execution options for local development and containerized cloud deployment.
 
 ---
 
-## 2. Containerized / Cloud Deployment (Optional)
+## 1. Local Execution (Primary Target)
 
-### Backend Deployment (Docker / Cloud Run / App Service):
-1. **Containerfile**:
-   ```dockerfile
-   FROM python:3.11-slim
-   WORKDIR /app
-   COPY backend/requirements.txt .
-   RUN pip install --no-cache-dir -r requirements.txt
-   COPY backend/ /app/
-   CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
-   ```
-2. **Environment Variables**: Inject `.env` variables via container environment settings.
+For local evaluation, run the automated Windows launchers:
+- Start: Double-click `START_PROJECT.bat` (Backend on Port 8000, Frontend on Port 5173).
+- Stop: Double-click `STOP_PROJECT.bat`.
+- Restart: Double-click `RESTART_PROJECT.bat`.
 
-### Frontend Deployment (Vercel / Netlify / S3):
-1. Build static assets:
-   ```bash
-   cd frontend
-   npm run build
-   ```
-2. Deploy the `frontend/dist` directory. Set `VITE_API_URL` to your production backend URL.
+---
+
+## 2. Containerized Deployment (Production Target)
+
+### Backend Containerization (FastAPI)
+```dockerfile
+FROM python:3.11-slim
+WORKDIR /app
+COPY backend/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY backend/ /app/
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+```
+
+### Frontend Production Build (Static Hosting)
+```bash
+cd frontend
+npm install
+npm run build
+```
+Deploy the output `frontend/dist` directory to an Nginx server, S3 bucket, or CDN, pointing `VITE_API_URL` to the backend endpoint.

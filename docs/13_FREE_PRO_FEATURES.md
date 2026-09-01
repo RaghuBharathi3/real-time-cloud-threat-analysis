@@ -1,37 +1,33 @@
-# 13. Free vs. Pro Feature Gating & Subscription Model
+# 13. Free vs. Pro Feature Comparison and Tier Gating
 
-This document outlines the capability separation between the Free standard tier and Pro enterprise subscription.
+## Purpose
+This document specifies the capability differences between the Free standard tier and the Pro enterprise tier.
 
 ---
 
 ## 1. Feature Comparison Matrix
 
-| Feature / Capability | Free Standard Tier | Pro Enterprise Tier |
+| Feature | Free Tier | Pro Tier |
 | :--- | :--- | :--- |
-| **Cloud Provider Access** | **AWS Only** | **AWS + Azure + GCP + OCI** |
-| **Daily Ingestion Limit** | 100 events / day | Unlimited event throughput |
-| **Threat Detection Model** | Random Forest verdict | Random Forest + Risk Score (0–100) |
-| **Compliance Mappings** | Basic posture check | **NIST CSF 2.0, CIS Controls v8, ISO 27001** |
-| **Deep Feature Vector Inspector** | Raw logs only | Engineered features + Diagnostic reasons |
-| **Continuous Log Simulation** | Locked (Admin only) | Unlocked for continuous real-time analysis |
-| **Admin Audit Trail** | Restricted | Full access (if role is Admin) |
+| Cloud Provider Ingestion | AWS Only | AWS, Azure, GCP, OCI |
+| Daily Event Ingestion Limit | 100 events / day | Unlimited throughput |
+| Threat Detection Model | Random Forest classification | Random Forest + Risk Score (0 to 100) |
+| Compliance Recommendations | Basic posture check | NIST CSF 2.0, CIS Controls v8, ISO/IEC 27001 |
+| Deep Feature Inspector | Raw fields only | 6-feature vector + diagnostic reasoning |
+| Continuous Log Stream | Disabled | Enabled |
+| Admin Audit Trail | Restricted | Available (for Admin role) |
 
 ---
 
 ## 2. Server-Side Enforcement
 
-Access control is enforced on the server via `UserProfile.is_pro`. The client UI reflects tier restrictions dynamically by disabling Pro-only sync buttons and displaying clear upgrade notifications.
-
-```
-Free User (is_pro = 0) ──> Attempts Azure / GCP Sync ──> Backend returns HTTP 403 Forbidden
-```
+Tier gating is enforced via the `UserProfile.is_pro` database column. If a Free tier user requests a Pro feature (e.g. syncing Azure or GCP logs), the backend responds with HTTP 403 Forbidden.
 
 ---
 
-## 3. Upgrading to Pro (Local Simulation)
+## 3. Tier Upgrade Workflow (Local Simulation)
 
-Users can upgrade from Free to Pro directly in the **Billing & Tiers** tab:
-1. Initiates checkout order (`POST /api/v1/billing/checkout`).
-2. Generates an HMAC-SHA256 signature payload.
-3. Sends a verified webhook callback (`POST /api/v1/billing/webhook`).
-4. Updates user record to `is_pro = 1` and logs an entry in the system audit trail.
+1. User initiates upgrade order (`POST /api/v1/billing/checkout`).
+2. Client computes Web Crypto HMAC-SHA256 signature.
+3. Client dispatches verified webhook (`POST /api/v1/billing/webhook`).
+4. Server updates user record to `is_pro = 1` and logs `PLAN_UPGRADE` in the audit log.

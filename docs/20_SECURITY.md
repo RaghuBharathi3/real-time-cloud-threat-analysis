@@ -1,32 +1,33 @@
-# 20. Comprehensive Security Posture & Vulnerability Analysis
+# 20. Security Posture and Vulnerability Analysis
 
-This document describes the defensive controls, vulnerability mitigations, and known security limitations of the academic prototype.
+## Purpose
+This document details the defensive controls, threat mitigations, and security boundaries implemented across the project.
 
 ---
 
-## 1. Security Controls & Defensive Matrix
+## 1. Security Controls and Mitigations
 
-| Threat Vector | Mitigation Implemented | Validation Evidence |
+| Threat Vector | Mitigation Strategy | Verification Method |
 | :--- | :--- | :--- |
-| **Credential Leakage** | All keys in `.env` and `credentials/` strictly ignored by `.gitignore`. Sanitized API responses. | Verified via `git check-ignore` and test suite. |
-| **SQL Injection** | Parameterized queries via SQLAlchemy ORM; no dynamic raw SQL string interpolation. | Database unit tests |
-| **Malformed Ingest Crashes** | Module 1 Pydantic schema validation and batch error isolation. | `test_batch_validation_error_isolation` |
-| **Privilege Escalation** | Server-side role validation (`require_admin`, `require_pro_tier`). | `test_admin_audit_logs_endpoint` (403 test) |
-| **Cross-Origin Attacks** | Configured FastAPI CORS middleware with origin control. | Security scan |
-| **Webhook Spoofing** | HMAC-SHA256 signature verification on billing webhook endpoints. | Cryptographic verification |
+| **Credential Leakage** | All secrets in `.env` and `credentials/` excluded via `.gitignore`. Sanitized API responses. | Git pre-commit checks and automated adapter tests. |
+| **SQL Injection** | Parameterized queries using SQLAlchemy ORM; no dynamic SQL string concatenation. | Database unit test suite. |
+| **Malformed Ingest Crashes** | Pydantic model validation and isolated batch error recording (Module 1). | `test_batch_validation_error_isolation` |
+| **Privilege Escalation** | Server-side role enforcement via FastAPI dependencies (`require_admin`, `require_pro_tier`). | `test_admin_audit_logs_endpoint` |
+| **Cross-Origin Attacks** | Configured FastAPI CORS middleware with origin control. | API security review. |
+| **Webhook Spoofing** | Cryptographic HMAC-SHA256 signature verification on billing endpoints. | Webhook integration tests. |
 
 ---
 
-## 2. Cloud IAM Least-Privilege Design
+## 2. Cloud Least-Privilege Design
 
-- **AWS**: Restricted to read-only IAM actions (`sts:GetCallerIdentity`, `cloudtrail:LookupEvents`).
-- **Azure**: App registration restricted to Microsoft Graph user/audit scopes without write permissions.
-- **GCP**: Service account granted `roles/logging.viewer` and `roles/viewer`.
-- **OCI**: Read-only audit inspection.
+- **AWS**: Restricted to `sts:GetCallerIdentity` and `cloudtrail:LookupEvents`.
+- **Azure**: App registration limited to Microsoft Graph read permissions without write access.
+- **GCP**: Service account limited to `roles/logging.viewer` and `roles/viewer`.
+- **OCI**: Read-only audit log inspection.
 
 ---
 
-## 3. Known Limitations for Future Production Hardening
+## 3. Academic Prototype Limitations
 
-1. **Local Session Authentication**: The academic prototype uses database-backed session headers (`X-User-ID`) for reliable local evaluation. In enterprise production, this should be upgraded to signed JWT tokens with short TTLs and OAuth2 / OIDC providers.
-2. **Secret Storage**: In cloud-native production, static `.env` and JSON files should be replaced with AWS Secrets Manager, Azure Key Vault, or GCP Secret Manager.
+1. **Local Authentication**: Uses database-backed session headers (`X-User-ID`) for evaluation simplicity. Production systems should use signed JWT tokens with short TTLs and an external OAuth2 / OIDC identity provider.
+2. **Secrets Storage**: Local files (`.env`, JSON keys) are used for local testing. Production deployments should use cloud secret managers (AWS Secrets Manager, Azure Key Vault, GCP Secret Manager).

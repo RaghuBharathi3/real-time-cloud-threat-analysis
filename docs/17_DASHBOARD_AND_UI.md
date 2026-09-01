@@ -1,50 +1,47 @@
-# 17. Security Operations Dashboard & UI Architecture
+# 17. Security Operations Dashboard and UI Specification
 
-This document describes the layout, components, and interactive capabilities of the React 18 + Vite frontend console.
+## Purpose
+This document specifies the layout, state architecture, and interactive controls of the React 18 + Vite frontend console.
 
 ---
 
-## 1. Dashboard Layout Structure
-
-The user interface follows a professional SOC console dark theme built with Tailwind CSS and responsive CSS tokens:
+## 1. Console Layout Structure
 
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
-│ Top Status Ribbon: Multi-Cloud Ingestion Pipeline State (ONLINE)      │
+│ Header: Title, Active Session Selector (ADMIN/ANALYST/USER), API Health│
 ├────────────────────────────────────────────────────────────────────────┤
-│ Console Header: Title, Active User Session Switcher, API Health       │
+│ Top Metrics: Total Events | Threats Flagged | Critical | Avg Risk | Conns│
 ├────────────────────────────────────────────────────────────────────────┤
-│ Top Metrics Ribbon: Total Events | Threats | Critical | Avg Risk | Cloud│
+│ Cloud Cards: AWS Card | Azure Card | GCP Card | OCI Card               │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Multi-Cloud Status Cards: AWS Card | Azure Card | GCP Card | OCI Card  │
+│ Scenario Bar: [AWS Attack] [Azure Vault] [GCP Burst] [OCI OK] [AWS OK] │
 ├────────────────────────────────────────────────────────────────────────┤
-│ 1-Click Presentation Scenarios Bar: [AWS] [Azure] [GCP] [OCI] [AWS]    │
-├────────────────────────────────────────────────────────────────────────┤
-│ Navigation Tabs: Threat Console | Ingest | Model Metrics | Audit | Tier│
+│ Navigation: Threat Console | Custom Ingest | Model Metrics | Audit Logs│
 ├───────────────────────────────────┬────────────────────────────────────┤
 │ Live Event Stream (Left 40%)     │ Deep Event Inspector (Right 60%)   │
-│ - Real-time scrolling events     │ - Module 1: Canonical Ingest JSON │
-│ - Provider badges                │ - Module 2: 6-Feature Vector Table │
-│ - Risk score & severity tags     │ - Module 3: RF Verdict & Risk Gauge│
-│ - Pause / Simulate Stream button │ - Compliance Recommendations Panel │
+│ - Scrolling event table          │ - Module 1: Ingest JSON Viewer     │
+│ - Cloud provider badges          │ - Module 2: 6-Feature Vector Table │
+│ - Severity indicator tags        │ - Module 3: Random Forest Gauge    │
+│ - Simulation Controls            │ - Compliance Recommendations Panel │
 └───────────────────────────────────┴────────────────────────────────────┘
 ```
 
 ---
 
-## 2. Key Interactive Components
+## 2. Component Specifications
 
-1. **Active Session Switcher**:
-   - Allows instant switching between `ADMIN_SECOPS (Admin)`, `SENIOR_ANALYST (Pro)`, and `GUEST_USER (Free)`.
+1. **Active Session Selector**:
+   - Toggles current active identity between `admin_secops` (Admin), `senior_analyst` (Pro), and `guest_user` (Free).
 2. **Top Metrics Ribbon**:
-   - Computes live counters for Total Events, Threats Detected, Critical Threats, Average Risk Score (0–100), and Connected Cloud count.
+   - Calculates dynamic counters for Total Ingested Events, Threats Detected, Critical Threat Count, Mean Risk Score, and Connected Clouds.
 3. **Multi-Cloud Status Cards**:
-   - Real-time badge indicators (`CONNECTED`, `DEMO MODE`, `NOT CONFIGURED`).
-   - "Test" button: Triggers on-demand credential check.
-   - "Sync Logs" button: Pulls cloud logs into the live pipeline.
+   - Visual status indicators (`CONNECTED`, `DEMO MODE`, `NOT CONFIGURED`).
+   - "Test" action: Executes non-blocking credential check via `/api/v1/cloud/test-connection/{provider}`.
+   - "Sync Logs" action: Pulls cloud audit telemetry into the live pipeline.
 4. **Deep Event Inspector**:
-   - Compares raw Module 1 JSON schema side-by-side with Module 2 feature vectors.
-   - Shows Random Forest confidence probability, risk score progress meter, and explainability reasoning list.
-   - Displays Compliance Framework Recommendations (**NIST CSF 2.0, CIS Controls v8, ISO/IEC 27001:2022**).
-5. **Admin Audit Trail Tab**:
-   - Visible only when active user is `ADMIN`. Displays immutable records of logins, connection tests, cloud syncs, model training, and plan switches.
+   - Side-by-side comparison of raw Module 1 fields and Module 2 engineered features.
+   - Real-time gauge rendering the 0 to 100 Risk Score.
+   - Actionable remediation advice mapped to NIST CSF 2.0, CIS Controls v8, and ISO/IEC 27001:2022.
+5. **Admin Audit Log View**:
+   - Restricted to ADMIN role. Displays system events, login records, sync operations, and retraining events.

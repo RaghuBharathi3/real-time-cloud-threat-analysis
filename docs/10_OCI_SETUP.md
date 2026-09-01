@@ -1,55 +1,43 @@
-# 10. Oracle Cloud Infrastructure (OCI) Setup & Demo Mode
+# 10. Oracle Cloud Infrastructure (OCI) Setup and Demo Mode
 
-This guide details the integration and simulation capabilities for Oracle Cloud Infrastructure (OCI).
-
----
-
-## 1. Overview & Current Status
-- **Current Mode**: `DEMO MODE` (Verified Oracle Cloud Guard Stream Simulator).
-- **Live Integration**: Supported via OCI API signing key and tenancy configuration.
-- **Fail-Safe Operation**: When live OCI credentials are not supplied, the platform seamlessly switches to deterministic Oracle Cloud Guard demo streams without blocking the system.
+## Purpose
+This document specifies the integration configuration and verified Demo Mode operation for Oracle Cloud Infrastructure (OCI).
 
 ---
 
-## 2. Live Configuration Steps (Optional)
-
-If connecting to a live OCI tenancy:
-
-### Step 1: Create OCI API Signing Key
-1. In the Oracle Cloud Console (`cloud.oracle.com`), go to **Identity & Security** $\rightarrow$ **Users** $\rightarrow$ User Details.
-2. Under **API Keys**, click **Add API Key**.
-3. Download the private key (`oci_api_key.pem`) and copy the configuration snippet.
-
-### Step 2: Configure Environment Variables
-Save your private key under `credentials/oci_api_key.pem` and configure `.env`:
-
-```ini
-OCI_TENANCY_OCID=<YOUR_OCI_TENANCY_OCID>
-OCI_USER_OCID=<YOUR_OCI_USER_OCID>
-OCI_FINGERPRINT=<YOUR_OCI_KEY_FINGERPRINT>
-OCI_PRIVATE_KEY_PATH=credentials/oci_api_key.pem
-OCI_REGION=us-ashburn-1
-```
+## 1. Operating Modes
+- **Demo Mode (Default)**: If live OCI credentials are not configured, the adapter automatically activates deterministic Oracle Cloud Guard simulation streams. All events flow through the full ML classification and risk scoring pipeline.
+- **Live Mode**: Uses OCI API signing keys to authenticate against an active tenancy.
 
 ---
 
-## 3. OCI Demo Mode Operation
+## 2. Live Configuration Procedure (Optional)
 
-When `OCI_TENANCY_OCID` is absent, the `OCIAdapter` automatically activates verified Demo Mode:
-- Normalizes canonical events such as `oci_object_store`, `oci_vault`, and `oci_compute_admin`.
-- Simulates realistic audit logs from IP `130.35.10.22`.
-- Ingests events through Module 1, Module 2, Module 3, and the Risk Engine.
+1. **Generate API Signing Key**:
+   - In Oracle Cloud Console (`cloud.oracle.com`), go to **Identity & Security** -> **Users** -> User Details -> **API Keys**.
+   - Generate and download the private key (`oci_api_key.pem`).
+2. **Key Placement**:
+   - Save the PEM file to `credentials/oci_api_key.pem` (git-ignored).
+3. **Configure Environment**:
+   Add the following variables to `.env`:
+   ```ini
+   OCI_TENANCY_OCID=<YOUR_OCI_TENANCY_OCID>
+   OCI_USER_OCID=<YOUR_OCI_USER_OCID>
+   OCI_FINGERPRINT=<YOUR_OCI_KEY_FINGERPRINT>
+   OCI_PRIVATE_KEY_PATH=credentials/oci_api_key.pem
+   OCI_REGION=us-ashburn-1
+   ```
 
 ---
 
-## 4. Testing & Diagnostics
+## 3. Verification
 
-Run:
+Run the verification tool:
 ```bash
 python scripts/check_cloud_credentials.py
 ```
 
-Expected diagnostic output:
+Expected output in Demo Mode:
 ```text
  OCI      [DEMO]   DEMO MODE       Running in verified OCI Demo Mode. Deterministic Oracle Cloud Guard streams active.
 ```

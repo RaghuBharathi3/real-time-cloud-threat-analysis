@@ -10,28 +10,22 @@ We added a **Mock Authentication Provider** in the SQLite database and a **Sessi
 
 * **Admin Session (`admin`)**:
   * Role: `ADMIN` | Tier: `PRO`
-  * Unlocks full dashboard, details view, and enables log stream simulation and model retraining.
-* **Analyst Session (`analyst`)**:
-  * Role: `ANALYST` | Tier: `PRO`
-  * Unlocks raw telemetry view and logs, but disables simulation control buttons (simulation is ADMIN-only).
-* **Free User Session (`user_free`)**:
-  * Role: `USER` | Tier: `FREE`
-  * Hides the raw JSON code blocks (raw audit logs are restricted to Analysts and Admins).
-  * Blocks simulation controls.
-  * Restricted to AWS event processing only.
-* **Pro User Session (`user_pro`)**:
-  * Role: `USER` | Tier: `PRO`
-  * Hides raw JSON payloads, but unlocks multi-cloud event logs (Azure, GCP, OCI) across the dashboard.
+  * Enables full dashboard, details view, and enables log stream simulation and model retraining.
+* `usr_analyst` (Analyst, Free):
+  * Enables raw telemetry view and logs, but disables simulation control buttons (simulation is ADMIN-only).
+* `usr_user` (User, Free):
+  * Baseline view: hides raw audit JSON payloads, allows AWS simulation, restricts multi-cloud providers (Azure, GCP, OCI) with 403 Forbidden.
+* `usr_pro` (User, Pro):
+  * Hides raw JSON payloads, but enables multi-cloud event logs (Azure, GCP, OCI) across the dashboard.
 
 ---
 
-## 2. Server-Side Tier Enforcements (Free vs. Pro)
-
-The server enforces multi-cloud account scanning restrictions at the API boundary, rather than relying solely on the frontend to hide features.
-
-### How to test:
-1. Select the **USER_FREE (USER) - FREE** active session in the top header.
-2. Go to the **Log Ingest Injector** tab.
+## 2. Dynamic Feature Gating (Free vs Pro)
+1. Switch session to `usr_user` (Free Tier).
+2. Attempt to sync or inspect `Azure`, `GCP`, or `OCI`.
+3. The UI immediately reflects access denial with HTTP 403 status and a warning prompt advising the user to upgrade.
+4. Go to the **Billing & Subscription** tab and click **Upgrade to Pro**.
+5. The session dropdown and active state refresh automatically, displaying `PRO` and enabling all cloud adapters.
 3. Select **Azure** or **Google Cloud** as the Cloud Provider, fill out the parameters, and click **Inject Event**.
 4. The console displays a red warning notification banner:
    `[INGESTION FORBIDDEN] Multi-cloud adapters require Pro subscription. Upgrade at the Billing tab.`
@@ -55,7 +49,7 @@ To support zero-budget deployments while demonstrating production-grade payment 
    * Sends the signature-verified webhook upgrade call to `/api/v1/billing/webhook` with header `X-Mock-Signature`.
    * The FastAPI server validates the cryptographic signature, matches the keys, upgrades the user record in SQLite, and returns:
      `Webhook processed successfully. User 'user_free' upgraded to PRO tier.`
-5. The session dropdown and active state refresh automatically, displaying `PRO` and unlocking all cloud adapters.
+5. The session dropdown and active state refresh automatically, displaying `PRO` and enabling all cloud adapters.
 
 ---
 

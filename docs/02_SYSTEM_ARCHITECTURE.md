@@ -1,19 +1,20 @@
 # 02. System Architecture
 
-## 1. High-Level Architecture
+## Purpose
+This document describes the multi-tier system architecture, component boundaries, and data flow between cloud adapters, the core security pipeline, the persistence layer, and the user interface.
 
-The framework is structured into a modular, decoupled pipeline where provider-specific cloud telemetry is collected, normalized, validated, engineered into feature vectors, classified by machine learning, scored for risk, mapped to compliance frameworks, and rendered on the SOC console.
+## System Architecture
 
 ```mermaid
-flowchart TD
-    subgraph MultiCloudSources [Multi-Cloud Telemetry Sources]
-        AWS[AWS CloudTrail / STS]
-        Azure[Azure Entra ID / Activity]
-        GCP[GCP Cloud Audit / Service Account]
-        OCI[Oracle Cloud Guard / Demo Stream]
+graph TD
+    subgraph MultiCloudSources [Cloud Telemetry Sources]
+        AWS[AWS CloudTrail]
+        Azure[Azure Activity Logs]
+        GCP[GCP Cloud Audit]
+        OCI[OCI Cloud Guard Stream]
     end
 
-    subgraph CloudAdapters [Cloud Adapters Layer]
+    subgraph AdaptersLayer [Cloud Adapters Layer]
         A_AWS[AWS Adapter]
         A_Azure[Azure Adapter]
         A_GCP[GCP Adapter]
@@ -25,55 +26,50 @@ flowchart TD
     GCP --> A_GCP
     OCI --> A_OCI
 
-    A_AWS & A_Azure & A_GCP & A_OCI --> CanonicalSchema[Canonical Security Event Schema]
+    A_AWS & A_Azure & A_GCP & A_OCI --> Schema[Canonical Security Event Schema]
 
-    subgraph CorePipeline [Core Security & ML Pipeline]
-        CanonicalSchema --> M1[MODULE 1: Event Collection & Validation]
-        M1 --> M2[MODULE 2: Preprocessing & Feature Engineering]
-        M2 --> M3[MODULE 3: Random Forest ML Classification]
-        M3 --> RiskEngine[Risk Scoring Engine 0-100]
-        RiskEngine --> Compliance[Compliance Recommendation Engine NIST / CIS / ISO]
+    subgraph CoreEngine [Core Analysis Engine]
+        Schema --> M1[Module 1: Ingestion & Validation]
+        M1 --> M2[Module 2: Feature Engineering]
+        M2 --> M3[Module 3: Random Forest Classifier]
+        M3 --> Risk[Risk Scoring Engine: 0 to 100]
+        Risk --> Compliance[Compliance Mapping: NIST, CIS, ISO]
     end
 
-    subgraph StorageLayer [Persistence & Auditing]
-        Compliance --> DB[(SQLite / PostgreSQL Database)]
-        AdminActions[Admin Actions & Configuration] --> AuditLog[(System Audit Logs)]
+    subgraph Storage [Persistence Layer]
+        Compliance --> DB[(SQLite / PostgreSQL)]
+        AuditEvents[Administrative Actions] --> AuditLog[(System Audit Logs)]
     end
 
-    subgraph FrontendUI [Security Operations Console]
-        DB --> Dashboard[React 18 + Vite Operations Dashboard]
-        AuditLog --> AdminPanel[Admin Audit Logs Viewer]
-        Dashboard --> DeepInspector[Deep Event Inspector & Risk Gauges]
+    subgraph Interface [Operations Interface]
+        DB --> UI[React 18 Operations Dashboard]
+        AuditLog --> AdminUI[Admin Audit Log Viewer]
     end
 ```
 
----
+## Architectural Layers
 
-## 2. Architectural Layers
+### 1. Cloud Adapters Layer (`backend/app/adapters/`)
+All cloud provider connectors inherit from the abstract class `BaseCloudAdapter`. This guarantees a uniform interface across all providers:
+- `connect()`: Initializes cloud clients using environment variables or service account files.
+- `validate_credentials()`: Verifies authentication against the cloud provider without exposing secret tokens.
+- `get_connection_status()`: Returns structured connectivity metrics and identity details.
+- `collect_events(limit)`: Retrieves audit logs from the provider.
+- `normalize_event(raw_event)`: Converts provider-specific JSON fields into the Canonical Event Schema.
 
-### 2.1 Cloud Adapters Layer (`backend/app/adapters/`)
-All cloud integrations implement the abstract interface `BaseCloudAdapter`:
-- `connect()`: Establishes read-only session.
-- `validate_credentials()`: Tests authentication without leaking secret tokens.
-- `get_connection_status()`: Returns connection metrics.
-- `collect_events()`: Fetches raw audit records.
-- `normalize_event()`: Translates proprietary schemas into the Canonical Event Schema.
+### 2. Core Analysis Pipeline (`backend/app/modules/`)
+- **Module 1 (Event Collection & Validation)**: Uses Pydantic models to enforce field types, timestamp formats, and IPv4 validity. Isolates malformed logs in batch operations so that valid events continue processing.
+- **Module 2 (Preprocessing & Feature Engineering)**: Identifies sensitive cloud resources across AWS, Azure, GCP, and OCI, checks for anomalous origin locations, and generates a 6-dimensional feature vector.
+- **Module 3 (Threat Detection)**: Evaluates feature vectors using a trained Random Forest classifier (`threat_detector.joblib`), assigns threat labels (`normal`, `brute_force`, `unauthorized_access`), and calculates model prediction confidence.
+- **Risk Scoring Engine**: Combines model confidence, asset sensitivity, and request velocity into a 0 to 100 risk score and categorizes severity into `LOW`, `MEDIUM`, `HIGH`, or `CRITICAL`.
+- **Compliance Recommendation Engine**: Maps threat categories and risk scores to specific control identifiers in NIST CSF 2.0, CIS Controls v8, and ISO/IEC 27001:2022.
 
-### 2.2 Canonical Event Schema
-A unified Pydantic model enforcing 10 standardized fields across all clouds:
-`event_id`, `timestamp`, `cloud_provider`, `user_id`, `event_type`, `ip_address`, `location`, `failed_attempts`, `resource`, `request_frequency`.
+### 3. Persistence Layer (`backend/app/db.py`)
+- `SecurityAlert`: Stores normalized event attributes, classification results, risk score, severity, and compliance recommendations.
+- `UserProfile`: Manages local user roles (`ADMIN`, `ANALYST`, `USER`) and tier flags (`is_pro`).
+- `AuditLog`: Maintains an immutable audit trail of system events, authentication tests, and administrative actions.
+- `BillingOrder`: Records mock subscription transactions and cryptographic webhook verifications.
 
-### 2.3 Machine Learning & Risk Layer (`backend/app/modules/`)
-- **Module 1**: Pydantic schema validation & batch error isolation.
-- **Module 2**: Multi-cloud asset mapping, sensitive keyword parsing, anomalous geo detection, producing a 6-feature vector.
-- **Module 3**: Random Forest Classifier evaluating threat class (`normal`, `brute_force`, `unauthorized_access`) and confidence probability.
-- **Risk Engine**: Calculates integer score (0–100) and maps severity (`LOW`, `MEDIUM`, `HIGH`, `CRITICAL`).
-- **Compliance Engine**: Generates mitigation steps mapped to NIST CSF 2.0, CIS Controls v8, and ISO/IEC 27001:2022.
-
-### 2.4 Persistence & Auditing Layer (`backend/app/db.py`)
-- `SecurityAlert`: Stores normalized events, ML labels, confidence, risk score, severity, reasons, and compliance recommendations.
-- `UserProfile`: Role-based access control (`ADMIN`, `ANALYST`, `USER`) and tier flags (`is_pro`).
-- `AuditLog`: System administration audit trail.
-
-### 2.5 Security Operations Console (`frontend/src/`)
-- Real-time React dashboard with Top Metrics Ribbon, Multi-Cloud Status Cards, Live Event Stream, 1-Click Presentation Scenarios, and Deep Event Inspector.
+### 4. Operations Console (`frontend/src/`)
+- Developed in React 18 with Vite and styled with Tailwind CSS.
+- Implements real-time event streaming, interactive cloud provider status cards, 1-click test scenarios, and a deep event inspector displaying raw JSON, engineered features, and compliance guidance side-by-side.

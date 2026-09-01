@@ -1,26 +1,23 @@
-# 14. Billing Architecture & Webhook Verification
+# 14. Billing Architecture and Webhook Verification
 
-This document details the billing subsystem, mock payment pipeline, and cryptographic verification flow.
-
----
-
-## 1. Overview & Implementation Status
-
-- **Status**: `DEMO BILLING` (Cryptographically Verified Local Pipeline).
-- **Integration**: Simulates production payment gateways (such as Razorpay or Stripe) using native **Web Crypto HMAC-SHA256** signatures on the client and backend validation in FastAPI.
-
-> [!NOTE]
-> **Decoupled Architecture**: Real payment gateway keys are optional. The platform operates self-contained without requiring external network calls to third-party payment processors.
+## Purpose
+This document specifies the mock payment subsystem, order creation flow, and cryptographic webhook verification.
 
 ---
 
-## 2. Cryptographic Checkout & Webhook Lifecycle
+## 1. Operating Mode
+- **Status**: DEMO BILLING (Cryptographically verified local pipeline).
+- **Design**: Simulates payment provider webhooks (e.g., Razorpay or Stripe) using native Web Crypto HMAC-SHA256 signatures on the client and backend validation in FastAPI. External payment gateway API keys are optional.
+
+---
+
+## 2. Cryptographic Checkout Flow
 
 ```
-[User Clicks 'Upgrade to Pro']
+[User Selects 'Upgrade to Pro']
              │
              ▼
-[POST /api/v1/billing/checkout]  ──> Creates BillingOrder (Status: 'created')
+[POST /api/v1/billing/checkout]  -> Creates BillingOrder record (Status: 'created')
              │
              ▼
 [Client computes Web Crypto HMAC-SHA256 Signature]
@@ -28,24 +25,24 @@ This document details the billing subsystem, mock payment pipeline, and cryptogr
              │
              ▼
 [POST /api/v1/billing/webhook]
- (Headers: `X-Mock-Signature: <hex_signature>`)
+ (Header: `X-Mock-Signature: <hex_signature>`)
              │
              ▼
-[Backend Updates User: `is_pro = 1` & Order: `status = 'paid'`]
+[Server verifies HMAC, updates `is_pro = 1` and order status = 'paid']
              │
              ▼
-[Audit Log Event Recorded: 'PLAN_UPGRADE']
+[Audit Log Record Created: 'PLAN_UPGRADE']
 ```
 
 ---
 
 ## 3. Database Schema
 
-- **Model**: `BillingOrder` (`backend/app/db.py`)
+- **Table**: `billing_orders` (`backend/app/db.py`)
 - **Fields**:
-  - `order_id`: String primary key (e.g. `ord_mock_260901...`)
-  - `user_id`: Foreign key to `UserProfile`
-  - `amount`: 49900 (representing ₹499.00 INR)
-  - `currency`: "INR"
-  - `status`: `created` $\rightarrow$ `paid`
-  - `created_at`: UTC Timestamp
+  - `order_id`: String primary key (e.g., `ord_mock_...`)
+  - `user_id`: Foreign key referencing `users.user_id`
+  - `amount`: 49900 (represents 499.00 INR)
+  - `currency`: String ("INR")
+  - `status`: String ("created" -> "paid")
+  - `created_at`: UTC timestamp

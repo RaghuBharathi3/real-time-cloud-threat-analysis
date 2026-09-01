@@ -1,32 +1,30 @@
-# 15. Real-Time Processing & Event Simulation
+# 15. Real-Time Processing and Simulation Mechanics
 
-This document describes the real-time event streaming mechanics, simulation engine, and dashboard update mechanisms.
-
----
-
-## 1. Real-Time Streaming Architecture
-
-The platform supports two modes of real-time security telemetry:
-
-1. **Simulated Continuous Stream**: Ingests realistic multi-cloud events from evaluation datasets (`data/raw/security_events_eval.csv`) at 3-second intervals.
-2. **On-Demand Cloud Sync**: Connects to configured cloud adapters (AWS, Azure, GCP, OCI) to pull and normalize recent audit events in batches.
+## Purpose
+This document describes the telemetry ingestion pipeline, continuous simulation loop, and state synchronization mechanisms.
 
 ---
 
-## 2. Dashboard Update Mechanism
+## 1. Real-Time Telemetry Modes
 
-To maximize operational reliability and eliminate heavy external message broker dependencies (e.g. Redis, Kafka, or WebSocket clustering), the frontend uses a responsive **State Synchronization Pattern**:
-
-- **Continuous Simulation Loop**: Admin users can toggle `SIMULATE STREAM`, which triggers automated ingestion cycles every 3000ms via `POST /api/v1/pipeline/simulate-next`.
-- **Reactive Health Polling**: Heartbeat polling verifies backend health and cloud status every 8000ms.
-- **Immediate State Reflection**: Ingested events, risk scores, and compliance recommendations update the UI state and deep inspector in real time without requiring a full page refresh.
+1. **Simulated Event Stream**: Ingests realistic multi-cloud events from evaluation datasets (`data/raw/security_events_eval.csv`) at 3-second intervals.
+2. **On-Demand Cloud Ingestion**: Connects to configured cloud adapters (AWS, Azure, GCP, OCI) to pull and normalize recent audit logs in batches.
 
 ---
 
-## 3. Real vs. Simulated Distinction
+## 2. Dashboard State Synchronization
 
-| Telemetry Stream | Origin | Processing Pipeline | Target Environment |
+To maintain high reliability without external message brokers (such as Redis or Kafka), the frontend uses a state synchronization pattern:
+- **Simulation Loop**: When the user enables the simulation toggle, the client polls `POST /api/v1/pipeline/simulate-next` every 3000ms.
+- **Health Heartbeat**: Polling verifies backend health and adapter status every 8000ms.
+- **Local State Updates**: Ingested events, calculated risk scores, and compliance recommendations update the UI state and event inspector immediately.
+
+---
+
+## 3. Comparison of Ingestion Streams
+
+| Telemetry Stream | Data Source | Pipeline Processing | Primary Use Case |
 | :--- | :--- | :--- | :--- |
-| **Live Cloud Sync** | AWS CloudTrail, Azure Entra ID, GCP Audit Logs | Module 1 $\rightarrow$ Module 2 $\rightarrow$ Module 3 $\rightarrow$ Risk Engine | Production / Staging |
-| **Deterministic Scenarios** | 1-Click presentation triggers (AWS Brute Force, Azure KeyVault, etc.) | Module 1 $\rightarrow$ Module 2 $\rightarrow$ Module 3 $\rightarrow$ Risk Engine | Academic Demo / Testing |
-| **Continuous Simulation** | `security_events_eval.csv` sampled events | Module 1 $\rightarrow$ Module 2 $\rightarrow$ Module 3 $\rightarrow$ Risk Engine | Offline Demo / SOC Testing |
+| **Live Cloud Sync** | AWS CloudTrail, Azure Activity, GCP Audit | Modules 1, 2, 3 + Risk Engine | Production / Staging |
+| **Deterministic Scenarios** | 1-Click presentation buttons | Modules 1, 2, 3 + Risk Engine | Demonstration / Testing |
+| **Continuous Stream** | `security_events_eval.csv` records | Modules 1, 2, 3 + Risk Engine | Offline Evaluation |
