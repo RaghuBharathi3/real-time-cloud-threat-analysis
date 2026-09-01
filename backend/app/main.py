@@ -1,59 +1,28 @@
 import os
 import json
-import random
-import pandas as pd
-from datetime import datetime, timedelta
-from typing import List, Dict, Any
-from fastapi import FastAPI, HTTPException, Depends, Query, Header
+from typing import List, Optional, Dict, Any
+from datetime import datetime, timezone
+from fastapi import FastAPI, Depends, HTTPException, Header, Query
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
-from prometheus_client import generate_latest, CONTENT_TYPE_LATEST, Counter, Gauge
 
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from .config import DEMO_MODE, settings
-from .db import init_db, get_db, SecurityAlert, SystemUser
-from .modules.module1_event_collection import SecurityEvent, validate_raw_event
-from .modules.module2_preprocessing import preprocess_single_event
-from .modules.module3_threat_detection import train_threat_model, predict_threat, get_loaded_metrics
+from .config import settings
+from .db import init_db, SessionLocal, SecurityAlert, UserProfile, BillingOrder, AuditLog, log_audit_event
+from .modules.module1_event_collection import validate_security_event, SecurityEvent
+from .modules.module2_preprocessing import preprocess_event
+from .modules.module3_threat_detection import predict_threat, train_threat_model, get_loaded_metrics
+from .adapters import get_adapter, get_all_adapters, get_multi_cloud_status
 
-app = FastAPI(title="Cloud Security Threat Detection Backend API")
+# Initialize SQLite tables and default users
+init_db()
 
-security = HTTPBearer(auto_error=False)
+app = FastAPI(
+    title="AI-Based Framework for Security Risk Evaluation in Multi-Cloud Environments",
+    version="2.0.0",
+    description="Multi-cloud intrusion detection, ML risk scoring, and automated compliance recommendations engine."
+)
 
-async def get_current_user(
-    x_user_id: str = Header("usr_free"), 
-    credentials: HTTPAuthorizationCredentials = Depends(security), 
-    db: Session = Depends(get_db)
-):
-    if DEMO_MODE:
-        user = db.query(SystemUser).filter(SystemUser.user_id == x_user_id).first()
-        if not user:
-            user = db.query(SystemUser).filter(SystemUser.user_id == "usr_free").first()
-        return user
-    else:
-        if not credentials:
-            raise HTTPException(status_code=401, detail="Missing authorization credentials (JWT)")
-        token = credentials.credentials
-        try:
-            import jwt
-            payload = jwt.decode(token, settings["SUPABASE_JWT_SECRET"], algorithms=["HS256"], audience="authenticated")
-            user_id = payload.get("sub")
-            if not user_id:
-                raise HTTPException(status_code=401, detail="Invalid token: missing sub claim")
-            user = db.query(SystemUser).filter(SystemUser.user_id == user_id).first()
-            if not user:
-                # Register user in DB
-                email = payload.get("email", f"user_{user_id[:8]}")
-                user = SystemUser(user_id=user_id, username=email, role="USER", is_pro=0)
-                db.add(user)
-                db.commit()
-                db.refresh(user)
-            return user
-        except Exception as e:
-            raise HTTPException(status_code=401, detail=f"JWT verification failed: {str(e)}")
-
-
-# Enable CORS for React integration
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -62,425 +31,533 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Prometheus Telemetry Counters
-EVENTS_COLLECTED = Counter("cloud_events_collected_total", "Total security events collected in Module 1")
-THREATS_DETECTED = Counter("cloud_threats_detected_total", "Total suspicious security threats flagged in Module 3", ["threat_type"])
-NORMAL_EVENTS = Counter("cloud_normal_events_total", "Total normal events identified")
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
-# Project Root Directory Calculation
-ROOT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-# Simulation global state index
-SIMULATION_INDEX = 0
-
-@app.on_event("startup")
-def startup_event():
-    # Initialize SQLite Database
-    init_db()
-    
-    # Auto-train model if dataset exists and model doesn't
-    train_path = os.path.join(ROOT_DIR, "data", "raw", "security_events.csv")
-    eval_path = os.path.join(ROOT_DIR, "data", "raw", "security_events_eval.csv")
-    model_path = os.path.join(os.path.dirname(__file__), "models", "threat_detector.joblib")
-    
-    if not os.path.exists(model_path):
-        if os.path.exists(train_path) and os.path.exists(eval_path):
-            print("[Startup] Training Random Forest Threat Detector...")
-            try:
-                metrics = train_threat_model(train_path, eval_path)
-                print(f"[Startup] Training successful. Model accuracy: {metrics['accuracy']:.4f}")
-            except Exception as e:
-                print(f"[Startup] Training failed: {e}")
-        else:
-            print("[Startup] Training data not found. Model will be trained on demand.")
-
-@app.get("/api/v1/auth/users")
-async def list_users(db: Session = Depends(get_db)):
-    users = db.query(SystemUser).all()
-    return [{"user_id": u.user_id, "username": u.username, "role": u.role, "is_pro": u.is_pro} for u in users]
-
-from fastapi import Request
-
-@app.get("/api/v1/auth/session")
-async def get_session(current_user: SystemUser = Depends(get_current_user)):
-    return {
-        "user_id": current_user.user_id,
-        "username": current_user.username,
-        "role": current_user.role,
-        "is_pro": current_user.is_pro,
-        "subscription_expires_at": current_user.subscription_expires_at
-    }
-
-@app.post("/api/v1/billing/checkout")
-async def billing_checkout(payload: Dict[str, Any], current_user: SystemUser = Depends(get_current_user), db: Session = Depends(get_db)):
-    if not current_user:
-        raise HTTPException(status_code=404, detail="User not found")
-    
-    amount = 49900  # 499 INR in paise
-    order_id = f"order_mock_{random.randint(100000, 999999)}"
-    
-    if not DEMO_MODE:
-        try:
-            import razorpay
-            client = razorpay.Client(auth=(settings["RAZORPAY_KEY_ID"], settings["RAZORPAY_KEY_SECRET"]))
-            order_data = {
-                "amount": amount,
-                "currency": "INR",
-                "receipt": f"receipt_{current_user.user_id}",
-                "notes": {
-                    "user_id": current_user.user_id,
-                    "plan": "pro"
-                }
-            }
-            order = client.order.create(data=order_data)
-            order_id = order["id"]
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Razorpay order creation failed: {str(e)}")
-            
-    return {
-        "status": "created",
-        "order_id": order_id,
-        "amount": amount,
-        "currency": "INR",
-        "user_id": current_user.user_id
-    }
-
-@app.post("/api/v1/billing/webhook")
-async def billing_webhook(
-    request: Request,
-    payload: Dict[str, Any],
-    x_mock_signature: str = Header(None),
-    x_razorpay_signature: str = Header(None),
-    db: Session = Depends(get_db)
-):
-    if DEMO_MODE:
-        payment_id = payload.get("payment_id")
-        order_id = payload.get("order_id")
-        user_id = payload.get("user_id")
-        
-        if not payment_id or not order_id or not user_id:
-            raise HTTPException(status_code=400, detail="Missing payment parameters")
-            
-        secret = "mock_secret_key_123"
-        raw_payload = f"{payment_id}:{order_id}"
-        import hmac, hashlib
-        expected_signature = hmac.new(secret.encode(), raw_payload.encode(), hashlib.sha256).hexdigest()
-        
-        if not x_mock_signature or not hmac.compare_digest(expected_signature, x_mock_signature):
-            raise HTTPException(status_code=401, detail="Invalid webhook signature. Access denied.")
-            
-        user_id_to_upgrade = user_id
-    else:
-        if not x_razorpay_signature:
-            raise HTTPException(status_code=400, detail="Missing X-Razorpay-Signature header")
-            
-        body = await request.body()
-        import hmac, hashlib
-        expected_signature = hmac.new(
-            settings["RAZORPAY_WEBHOOK_SECRET"].encode(), 
-            body, 
-            hashlib.sha256
-        ).hexdigest()
-        
-        if not hmac.compare_digest(expected_signature, x_razorpay_signature):
-            raise HTTPException(status_code=401, detail="Invalid Razorpay webhook signature")
-            
-        event = payload.get("event")
-        if event != "payment.captured":
-            return {"status": "ignored", "message": "Only payment.captured event is processed."}
-            
-        payment_entity = payload.get("payload", {}).get("payment", {}).get("entity", {})
-        user_id_to_upgrade = payment_entity.get("notes", {}).get("user_id")
-        if not user_id_to_upgrade:
-            raise HTTPException(status_code=400, detail="Missing user_id in payment notes")
-            
-    user = db.query(SystemUser).filter(SystemUser.user_id == user_id_to_upgrade).first()
+def get_current_user(x_user_id: Optional[str] = Header(None), db: Session = Depends(get_db)) -> UserProfile:
+    user_id = x_user_id or "usr_free"
+    user = db.query(UserProfile).filter(UserProfile.user_id == user_id).first()
     if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-        
-    user.is_pro = 1
-    user.subscription_expires_at = (datetime.utcnow() + timedelta(days=30)).isoformat()
-    db.commit()
-    db.refresh(user)
-    
-    return {
-        "status": "verified",
-        "message": f"Webhook processed successfully. User '{user.username}' upgraded to PRO tier."
-    }
+        user = db.query(UserProfile).filter(UserProfile.user_id == "usr_free").first()
+    return user
 
-@app.get("/api/v1/health")
-async def health_check():
-    return {
-        "status": "healthy",
-        "service": "cloud-security-assistant",
-        "demo_mode": DEMO_MODE
-    }
+def require_admin(user: UserProfile = Depends(get_current_user)):
+    if user.role != "ADMIN":
+        raise HTTPException(
+            status_code=403, 
+            detail="Forbidden: Admin privilege required to perform this action."
+        )
+    return user
 
-
-@app.post("/api/v1/events/collect")
-async def collect_event(event: Dict[str, Any]):
-    """
-    Module 1: Basic validation of event schema.
-    """
-    try:
-        validated_event = validate_raw_event(event)
-        EVENTS_COLLECTED.inc()
-        return {
-            "status": "validated",
-            "event_id": validated_event.event_id,
-            "timestamp": validated_event.timestamp,
-            "data": validated_event.dict()
-        }
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Module 1 Validation Error: {str(e)}")
-
-@app.post("/api/v1/preprocess")
-async def preprocess_event(event: Dict[str, Any]):
-    """
-    Module 2: Extracts features from validated event.
-    """
-    try:
-        validated = validate_raw_event(event)
-        features = preprocess_single_event(validated)
-        return {
-            "status": "preprocessed",
-            "event_id": features["event_id"],
-            "features": features
-        }
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Module 2 Preprocessing Error: {str(e)}")
-
-@app.post("/api/v1/detect")
-async def detect_threat(features: Dict[str, Any]):
-    """
-    Module 3: Run Random Forest prediction.
-    """
-    try:
-        prediction = predict_threat(features)
-        return {
-            "status": "analyzed",
-            "prediction": prediction
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Module 3 Threat Detection Error: {str(e)}")
-
-@app.post("/api/v1/pipeline/run")
-async def run_pipeline(raw_event: Dict[str, Any], current_user: SystemUser = Depends(get_current_user), db: Session = Depends(get_db)):
-    """
-    Integrates Modules 1, 2, and 3: Runs full pipeline on a single incoming event
-    and logs the alert/status to SQLite for dashboard view.
-    """
-    user = current_user
-        
-    # Enforce multi-cloud restriction for non-pro users
-    provider = raw_event.get("cloud_provider", "aws").lower()
-    if user.is_pro == 0 and provider != "aws":
+def require_pro_tier(user: UserProfile = Depends(get_current_user)):
+    if user.is_pro != 1 and user.role != "ADMIN":
         raise HTTPException(
             status_code=403,
-            detail="Multi-cloud adapters require Pro subscription. Upgrade at the Billing tab."
+            detail="Forbidden: Multi-Cloud feature requires an active Pro Subscription."
+        )
+    return user
+
+# --- Health & Status ---
+
+@app.get("/api/v1/health")
+def health_check():
+    return {
+        "status": "healthy",
+        "demo_mode": settings.is_demo_mode,
+        "cloud_providers": settings.get_safe_cloud_summary(),
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }
+
+# --- Cloud Adapters & Status ---
+
+@app.get("/api/v1/cloud/status")
+def get_cloud_status(refresh: bool = Query(False), user: UserProfile = Depends(get_current_user)):
+    statuses = get_multi_cloud_status(refresh=refresh)
+    return {
+        "providers": statuses,
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }
+
+@app.post("/api/v1/cloud/test-connection/{provider}")
+def test_cloud_connection(
+    provider: str,
+    user: UserProfile = Depends(get_current_user)
+):
+    adapter = get_adapter(provider)
+    if not adapter:
+        raise HTTPException(status_code=404, detail=f"Unsupported cloud provider: '{provider}'")
+    
+    res = adapter.validate_credentials()
+    log_audit_event(
+        actor=user.username,
+        action="CLOUD_CONNECTION_TEST",
+        details=f"Tested {provider.upper()} connection. Status: {res.get('status')}"
+    )
+    return res
+
+@app.post("/api/v1/cloud/sync/{provider}")
+def sync_cloud_logs(
+    provider: str,
+    limit: int = Query(5, ge=1, le=50),
+    user: UserProfile = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if provider.lower() not in ["aws"] and user.is_pro != 1 and user.role != "ADMIN":
+        raise HTTPException(
+            status_code=403,
+            detail=f"Ingestion from {provider.upper()} requires a Pro subscription."
         )
 
-    try:
-        # Step 1: Validate Schema (Module 1)
-        validated = validate_raw_event(raw_event)
-        EVENTS_COLLECTED.inc()
-        
-        # Step 2: Preprocess & Feature Engineer (Module 2)
-        features = preprocess_single_event(validated)
-        
-        # Step 3: Classify Threat (Module 3)
-        prediction = predict_threat(features)
-        
-        # Telemetry updates
-        if prediction["threat_status"] == "Suspicious":
-            THREATS_DETECTED.labels(threat_type=prediction["threat_type"]).inc()
-        else:
-            NORMAL_EVENTS.inc()
+    adapter = get_adapter(provider)
+    if not adapter:
+        raise HTTPException(status_code=404, detail=f"Unsupported cloud provider: '{provider}'")
 
-        # Save to DB
-        alert_db = SecurityAlert(
-            event_id=validated.event_id,
-            timestamp=validated.timestamp,
-            cloud_provider=validated.cloud_provider,
-            user_id=validated.user_id,
-            event_type=validated.event_type,
-            ip_address=validated.ip_address,
-            location=validated.location,
-            resource=validated.resource,
-            failed_attempts=validated.failed_attempts,
-            request_frequency=validated.request_frequency,
-            is_sensitive_resource=features["is_sensitive_resource"],
-            is_unusual_location=features["is_unusual_location"],
-            threat_status=prediction["threat_status"],
-            threat_type=prediction["threat_type"],
-            confidence=prediction["confidence"],
-            reasons=json.dumps(prediction["reason"])
+    raw_events = adapter.collect_events(limit=limit)
+    processed = []
+
+    for raw in raw_events:
+        try:
+            canonical = adapter.normalize_event(raw)
+            validated = validate_security_event(canonical)
+            features = preprocess_event(validated.model_dump())
+            threat_res = predict_threat(features, resource_name=validated.resource)
+
+            # Persist alert
+            existing = db.query(SecurityAlert).filter(SecurityAlert.event_id == validated.event_id).first()
+            if not existing:
+                db_alert = SecurityAlert(
+                    event_id=validated.event_id,
+                    timestamp=validated.timestamp,
+                    cloud_provider=validated.cloud_provider,
+                    user_id=validated.user_id,
+                    event_type=validated.event_type,
+                    ip_address=validated.ip_address,
+                    location=validated.location,
+                    failed_attempts=validated.failed_attempts,
+                    resource=validated.resource,
+                    request_frequency=validated.request_frequency,
+                    threat_status=threat_res["threat_status"],
+                    threat_type=threat_res["threat_type"],
+                    confidence=threat_res["confidence"],
+                    risk_score=threat_res["risk_score"],
+                    severity=threat_res["severity"],
+                    reasons=json.dumps(threat_res["reason"]),
+                    compliance_recommendations=json.dumps(threat_res.get("compliance", {}))
+                )
+                db.add(db_alert)
+                db.commit()
+
+            processed.append({
+                "event_id": validated.event_id,
+                "cloud_provider": validated.cloud_provider,
+                "threat_status": threat_res["threat_status"],
+                "threat_type": threat_res["threat_type"],
+                "risk_score": threat_res["risk_score"],
+                "severity": threat_res["severity"],
+                "compliance": threat_res.get("compliance", {})
+            })
+        except Exception as e:
+            continue
+
+    log_audit_event(
+        actor=user.username,
+        action="CLOUD_SYNC",
+        details=f"Synchronized {len(processed)} events from {provider.upper()} adapter."
+    )
+
+    return {
+        "provider": provider,
+        "synced_count": len(processed),
+        "events": processed
+    }
+
+# --- Core Pipeline Execution ---
+
+@app.post("/api/v1/pipeline/run")
+def run_pipeline(
+    raw_event: Dict[str, Any], 
+    user: UserProfile = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    provider = str(raw_event.get("cloud_provider", "aws")).lower()
+    if provider != "aws" and user.is_pro != 1 and user.role != "ADMIN":
+        raise HTTPException(
+            status_code=403, 
+            detail=f"Security event ingestion from '{provider.upper()}' requires an upgraded Pro Subscription."
         )
-        
-        # Overwrite existing event if event_id matches
-        existing = db.query(SecurityAlert).filter(SecurityAlert.event_id == validated.event_id).first()
-        if existing:
-            db.delete(existing)
-            db.commit()
-            
-        db.add(alert_db)
+
+    # Module 1
+    validated_event = validate_security_event(raw_event)
+    
+    # Module 2
+    preprocessed_features = preprocess_event(validated_event.model_dump())
+    
+    # Module 3 + Risk Engine + Compliance Recommendations
+    threat_result = predict_threat(preprocessed_features, resource_name=validated_event.resource)
+    
+    # Store in Database
+    db_alert = SecurityAlert(
+        event_id=validated_event.event_id,
+        timestamp=validated_event.timestamp,
+        cloud_provider=validated_event.cloud_provider,
+        user_id=validated_event.user_id,
+        event_type=validated_event.event_type,
+        ip_address=validated_event.ip_address,
+        location=validated_event.location,
+        failed_attempts=validated_event.failed_attempts,
+        resource=validated_event.resource,
+        request_frequency=validated_event.request_frequency,
+        threat_status=threat_result["threat_status"],
+        threat_type=threat_result["threat_type"],
+        confidence=threat_result["confidence"],
+        risk_score=threat_result["risk_score"],
+        severity=threat_result["severity"],
+        reasons=json.dumps(threat_result["reason"]),
+        compliance_recommendations=json.dumps(threat_result.get("compliance", {}))
+    )
+    
+    existing = db.query(SecurityAlert).filter(SecurityAlert.event_id == validated_event.event_id).first()
+    if not existing:
+        db.add(db_alert)
         db.commit()
-        db.refresh(alert_db)
+    
+    return {
+        "event_id": validated_event.event_id,
+        "raw_event": validated_event.model_dump(),
+        "features": preprocessed_features,
+        "detection_result": threat_result,
+        "risk_score": threat_result["risk_score"],
+        "severity": threat_result["severity"],
+        "compliance": threat_result.get("compliance", {})
+    }
 
-        return {
-            "event_id": validated.event_id,
-            "raw_event": {**raw_event, "cloud_provider": validated.cloud_provider},
-            "preprocessed_features": features,
-            "detection_result": prediction
-        }
-    except Exception as e:
-        if isinstance(e, HTTPException):
-            raise e
-        raise HTTPException(status_code=400, detail=f"Pipeline Execution Failed: {str(e)}")
+# --- Deterministic Demo Scenarios ---
 
-@app.get("/api/v1/alerts", response_model=List[Dict[str, Any]])
-async def list_alerts(limit: int = 50, db: Session = Depends(get_db)):
-    """
-    Returns recent alerts/logs saved in the DB.
-    """
-    alerts = db.query(SecurityAlert).order_by(SecurityAlert.processed_at.desc()).limit(limit).all()
+DEMO_SCENARIOS = {
+    "aws_brute_force": {
+        "event_id": "DEMO-AWS-BRUTEFORCE",
+        "timestamp": datetime.now(timezone.utc).isoformat()[:19],
+        "cloud_provider": "aws",
+        "user_id": "sec_intruder",
+        "event_type": "login",
+        "ip_address": "198.51.100.42",
+        "location": "RU",
+        "failed_attempts": 9,
+        "resource": "ec2_admin_portal",
+        "request_frequency": 15
+    },
+    "azure_keyvault": {
+        "event_id": "DEMO-AZURE-KEYVAULT",
+        "timestamp": datetime.now(timezone.utc).isoformat()[:19],
+        "cloud_provider": "azure",
+        "user_id": "suspicious_actor",
+        "event_type": "resource_access",
+        "ip_address": "203.0.113.88",
+        "location": "CN",
+        "failed_attempts": 0,
+        "resource": "azure_keyvault",
+        "request_frequency": 12
+    },
+    "gcp_storage_burst": {
+        "event_id": "DEMO-GCP-DATABURST",
+        "timestamp": datetime.now(timezone.utc).isoformat()[:19],
+        "cloud_provider": "gcp",
+        "user_id": "api_crawler",
+        "event_type": "api_call",
+        "ip_address": "192.0.2.140",
+        "location": "US",
+        "failed_attempts": 0,
+        "resource": "gcp_kms",
+        "request_frequency": 35
+    },
+    "oci_normal": {
+        "event_id": "DEMO-OCI-STANDARD",
+        "timestamp": datetime.now(timezone.utc).isoformat()[:19],
+        "cloud_provider": "oci",
+        "user_id": "oracle_operator",
+        "event_type": "resource_access",
+        "ip_address": "130.35.10.22",
+        "location": "US",
+        "failed_attempts": 0,
+        "resource": "oci_object_store",
+        "request_frequency": 2
+    },
+    "aws_normal": {
+        "event_id": "DEMO-AWS-STANDARD",
+        "timestamp": datetime.now(timezone.utc).isoformat()[:19],
+        "cloud_provider": "aws",
+        "user_id": "dev_analyst",
+        "event_type": "resource_access",
+        "ip_address": "54.239.28.85",
+        "location": "US",
+        "failed_attempts": 0,
+        "resource": "s3_public_assets",
+        "request_frequency": 1
+    }
+}
+
+@app.post("/api/v1/pipeline/demo-scenario/{scenario_name}")
+def trigger_demo_scenario(
+    scenario_name: str,
+    user: UserProfile = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    scen = DEMO_SCENARIOS.get(scenario_name.lower())
+    if not scen:
+        raise HTTPException(
+            status_code=404, 
+            detail=f"Scenario '{scenario_name}' not found. Available: {list(DEMO_SCENARIOS.keys())}"
+        )
+    
+    # Generate unique ID and fresh timestamp
+    unique_event = dict(scen)
+    now_str = datetime.now(timezone.utc).isoformat()[:19]
+    unique_event["event_id"] = f"{scen['event_id']}-{datetime.now(timezone.utc).strftime('%H%M%S')}"
+    unique_event["timestamp"] = now_str
+
+    if unique_event["cloud_provider"] != "aws" and user.is_pro != 1 and user.role != "ADMIN":
+        raise HTTPException(
+            status_code=403,
+            detail=f"Demo scenario for {unique_event['cloud_provider'].upper()} requires Pro Tier."
+        )
+
+    # Ingest through entire Canonical Pipeline
+    val = validate_security_event(unique_event)
+    feat = preprocess_event(val.model_dump())
+    threat_res = predict_threat(feat, resource_name=val.resource)
+
+    db_alert = SecurityAlert(
+        event_id=val.event_id,
+        timestamp=val.timestamp,
+        cloud_provider=val.cloud_provider,
+        user_id=val.user_id,
+        event_type=val.event_type,
+        ip_address=val.ip_address,
+        location=val.location,
+        failed_attempts=val.failed_attempts,
+        resource=val.resource,
+        request_frequency=val.request_frequency,
+        threat_status=threat_res["threat_status"],
+        threat_type=threat_res["threat_type"],
+        confidence=threat_res["confidence"],
+        risk_score=threat_res["risk_score"],
+        severity=threat_res["severity"],
+        reasons=json.dumps(threat_res["reason"]),
+        compliance_recommendations=json.dumps(threat_res.get("compliance", {}))
+    )
+    db.add(db_alert)
+    db.commit()
+
+    return {
+        "event_id": val.event_id,
+        "raw_event": val.model_dump(),
+        "features": feat,
+        "detection_result": threat_res,
+        "risk_score": threat_res["risk_score"],
+        "severity": threat_res["severity"],
+        "compliance": threat_res.get("compliance", {})
+    }
+
+@app.post("/api/v1/pipeline/simulate-next")
+def simulate_next_event(
+    user: UserProfile = Depends(require_admin), 
+    db: Session = Depends(get_db)
+):
+    root_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+    eval_csv = os.path.join(root_dir, "data", "raw", "security_events_eval.csv")
+    
+    if not os.path.exists(eval_csv):
+        raise HTTPException(status_code=404, detail="Simulation dataset not found on disk.")
+        
+    import pandas as pd
+    df = pd.read_csv(eval_csv)
+    sample = df.sample(n=1).iloc[0].to_dict()
+    
+    unique_id = f"EVT{datetime.now(timezone.utc).strftime('%y%m%d%H%M%S%f')[:14]}"
+    sample["event_id"] = unique_id
+    sample["timestamp"] = datetime.now(timezone.utc).isoformat()[:19]
+    sample.pop("label", None)
+    
+    # Process through pipeline
+    val = validate_security_event(sample)
+    feat = preprocess_event(val.model_dump())
+    threat_res = predict_threat(feat, resource_name=val.resource)
+    
+    db_alert = SecurityAlert(
+        event_id=val.event_id,
+        timestamp=val.timestamp,
+        cloud_provider=val.cloud_provider,
+        user_id=val.user_id,
+        event_type=val.event_type,
+        ip_address=val.ip_address,
+        location=val.location,
+        failed_attempts=val.failed_attempts,
+        resource=val.resource,
+        request_frequency=val.request_frequency,
+        threat_status=threat_res["threat_status"],
+        threat_type=threat_res["threat_type"],
+        confidence=threat_res["confidence"],
+        risk_score=threat_res["risk_score"],
+        severity=threat_res["severity"],
+        reasons=json.dumps(threat_res["reason"]),
+        compliance_recommendations=json.dumps(threat_res.get("compliance", {}))
+    )
+    
+    db.add(db_alert)
+    db.commit()
+    
+    return {
+        "event_id": val.event_id,
+        "raw_event": val.model_dump(),
+        "features": feat,
+        "detection_result": threat_res,
+        "risk_score": threat_res["risk_score"],
+        "severity": threat_res["severity"],
+        "compliance": threat_res.get("compliance", {})
+    }
+
+# --- Alerts Feed ---
+
+@app.get("/api/v1/alerts")
+def get_alerts(limit: int = 50, db: Session = Depends(get_db)):
+    records = db.query(SecurityAlert).order_by(SecurityAlert.timestamp.desc()).limit(limit).all()
     results = []
-    for alert in alerts:
+    for r in records:
+        try:
+            reasons_list = json.loads(r.reasons) if r.reasons else []
+        except Exception:
+            reasons_list = [r.reasons] if r.reasons else []
+
+        try:
+            comp_data = json.loads(r.compliance_recommendations) if r.compliance_recommendations else {}
+        except Exception:
+            comp_data = {}
+            
         results.append({
-            "event_id": alert.event_id,
-            "timestamp": alert.timestamp,
-            "cloud_provider": alert.cloud_provider,
-            "user_id": alert.user_id,
-            "event_type": alert.event_type,
-            "ip_address": alert.ip_address,
-            "location": alert.location,
-            "resource": alert.resource,
-            "failed_attempts": alert.failed_attempts,
-            "request_frequency": alert.request_frequency,
-            "threat_status": alert.threat_status,
-            "threat_type": alert.threat_type,
-            "confidence": alert.confidence,
-            "reasons": json.loads(alert.reasons),
-            "processed_at": alert.processed_at.isoformat()
+            "event_id": r.event_id,
+            "timestamp": r.timestamp,
+            "cloud_provider": r.cloud_provider or "aws",
+            "user_id": r.user_id,
+            "event_type": r.event_type,
+            "ip_address": r.ip_address,
+            "location": r.location,
+            "failed_attempts": r.failed_attempts,
+            "resource": r.resource,
+            "request_frequency": r.request_frequency,
+            "threat_status": r.threat_status,
+            "threat_type": r.threat_type,
+            "confidence": r.confidence,
+            "risk_score": r.risk_score if r.risk_score is not None else 10,
+            "severity": r.severity or "LOW",
+            "reasons": reasons_list,
+            "compliance": comp_data
         })
     return results
 
-@app.post("/api/v1/model/train")
-async def train_model_endpoint(current_user: SystemUser = Depends(get_current_user), db: Session = Depends(get_db)):
-    """
-    Triggers model training pipeline and outputs metrics. Only accessible by ADMIN.
-    """
-    user = current_user
-    if not user or user.role != "ADMIN":
-        raise HTTPException(
-            status_code=403, 
-            detail="Admin privilege required. Your role must be ADMIN."
-        )
-        
-    train_path = os.path.join(ROOT_DIR, "data", "raw", "security_events.csv")
-    eval_path = os.path.join(ROOT_DIR, "data", "raw", "security_events_eval.csv")
-    
-    if not (os.path.exists(train_path) and os.path.exists(eval_path)):
-        raise HTTPException(status_code=400, detail="Training datasets are missing. Run data/generate_data.py first.")
-        
-    try:
-        metrics = train_threat_model(train_path, eval_path)
-        return {
-            "status": "success",
-            "message": "Model trained and saved successfully.",
-            "metrics": metrics
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Training Failed: {str(e)}")
+# --- Model Metrics & Retraining ---
 
 @app.get("/api/v1/model/metrics")
-async def get_metrics_endpoint():
-    """
-    Returns currently stored model metrics.
-    """
-    metrics = get_loaded_metrics()
-    if not metrics:
-        raise HTTPException(status_code=404, detail="Model metrics not found. Model might not be trained.")
-    return metrics
+def get_model_metrics(user: UserProfile = Depends(get_current_user)):
+    return get_loaded_metrics()
 
-@app.post("/api/v1/pipeline/simulate-next")
-async def simulate_next_event(current_user: SystemUser = Depends(get_current_user), db: Session = Depends(get_db)):
-    """
-    Simulates a streaming-event ingestion by taking the next record from the
-    evaluation dataset, passing it through the pipeline, and saving it to SQLite.
-    Only accessible by ADMIN.
-    """
-    user = current_user
-    if not user or user.role != "ADMIN":
-        raise HTTPException(
-            status_code=403, 
-            detail="Admin privilege required. Your role must be ADMIN."
-        )
-        
-    global SIMULATION_INDEX
-    eval_path = os.path.join(ROOT_DIR, "data", "raw", "security_events_eval.csv")
+@app.post("/api/v1/model/train")
+def retrain_model(user: UserProfile = Depends(require_admin)):
+    root_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+    train_csv = os.path.join(root_dir, "data", "raw", "security_events.csv")
+    eval_csv = os.path.join(root_dir, "data", "raw", "security_events_eval.csv")
     
-    if not os.path.exists(eval_path):
-        raise HTTPException(status_code=400, detail="Evaluation dataset is missing.")
+    if not (os.path.exists(train_csv) and os.path.exists(eval_csv)):
+        raise HTTPException(status_code=404, detail="Datasets for model training not found.")
         
-    try:
-        df = pd.read_csv(eval_path)
-        if len(df) == 0:
-            raise HTTPException(status_code=400, detail="Evaluation dataset is empty.")
-            
-        # Get event row based on simulation index
-        row = df.iloc[SIMULATION_INDEX % len(df)]
-        SIMULATION_INDEX += 1
-        
-        # Decide simulated provider based on user tier
-        if user.is_pro == 1:
-            providers = ["aws", "azure", "gcp", "oci"]
-            simulated_provider = providers[SIMULATION_INDEX % 4]
-        else:
-            simulated_provider = "aws"
-            
-        # Adjust simulated resource names to reflect the provider
-        resource = str(row["resource"])
-        if simulated_provider == "azure":
-            resource = resource.replace("s3_bucket", "azure_blob").replace("ec2_", "azure_vm_").replace("kms_keys", "azure_keyvault")
-        elif simulated_provider == "gcp":
-            resource = resource.replace("s3_bucket", "gcp_cloud_storage").replace("ec2_", "gcp_compute_").replace("kms_keys", "gcp_kms")
-        elif simulated_provider == "oci":
-            resource = resource.replace("s3_bucket", "oci_object_store").replace("ec2_", "oci_compute_").replace("kms_keys", "oci_vault")
-            
-        raw_event = {
-            "event_id": str(row["event_id"]),
-            "timestamp": str(row["timestamp"]),
-            "cloud_provider": simulated_provider,
-            "user_id": str(row["user_id"]),
-            "event_type": str(row["event_type"]),
-            "ip_address": str(row["ip_address"]),
-            "location": str(row["location"]) if pd.notna(row["location"]) else "Unknown",
-            "failed_attempts": int(row["failed_attempts"]) if pd.notna(row["failed_attempts"]) else 0,
-            "resource": resource,
-            "request_frequency": int(row["request_frequency"]) if pd.notna(row["request_frequency"]) else 1
-        }
-        
-        # Execute pipeline
-        result = await run_pipeline(raw_event, x_user_id, db)
-        return result
-        
-    except Exception as e:
-        if isinstance(e, HTTPException):
-            raise e
-        raise HTTPException(status_code=500, detail=f"Simulation failed: {str(e)}")
+    metrics = train_threat_model(train_csv, eval_csv)
+    log_audit_event(
+        actor=user.username,
+        action="MODEL_RETRAIN",
+        details=f"Re-fitted Random Forest model. New Accuracy: {metrics.get('accuracy', 0):.4f}"
+    )
+    return {
+        "status": "success",
+        "message": "Model retrained and saved successfully.",
+        "metrics": metrics
+    }
 
-@app.get("/metrics")
-async def prometheus_metrics():
-    """
-    Exports Prometheus telemetry dashboard metrics.
-    """
-    return HTTPResponseMetrics(generate_latest().decode("utf-8"))
+# --- User & Session API ---
 
-def HTTPResponseMetrics(data: str):
-    from fastapi import Response
-    return Response(content=data, media_type=CONTENT_TYPE_LATEST)
+@app.get("/api/v1/auth/users")
+def get_all_mock_users(db: Session = Depends(get_db)):
+    return db.query(UserProfile).all()
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("backend.app.main:app", host="0.0.0.0", port=8000, reload=True)
+@app.get("/api/v1/auth/session")
+def get_session(user: UserProfile = Depends(get_current_user)):
+    return user
+
+# --- Admin Audit Trail ---
+
+@app.get("/api/v1/admin/audit-logs")
+def get_audit_logs(
+    limit: int = 50,
+    user: UserProfile = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    logs = db.query(AuditLog).order_by(AuditLog.timestamp.desc()).limit(limit).all()
+    return logs
+
+# --- Billing Webhooks & Checkout ---
+
+class CheckoutRequest(BaseModel):
+    plan: str = Field(default="pro")
+
+class WebhookPayload(BaseModel):
+    payment_id: str
+    order_id: str
+    user_id: str
+
+@app.post("/api/v1/billing/checkout")
+def create_checkout_order(
+    req: CheckoutRequest,
+    user: UserProfile = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    order_id = f"ord_mock_{datetime.now(timezone.utc).strftime('%y%m%d%H%M%S')}"
+    order = BillingOrder(
+        order_id=order_id,
+        user_id=user.user_id,
+        amount=49900,
+        currency="INR",
+        status="created"
+    )
+    db.add(order)
+    db.commit()
+    return {"order_id": order_id, "amount": 49900, "currency": "INR"}
+
+@app.post("/api/v1/billing/webhook")
+def mock_payment_webhook(
+    payload: WebhookPayload,
+    x_mock_signature: Optional[str] = Header(None),
+    db: Session = Depends(get_db)
+):
+    user = db.query(UserProfile).filter(UserProfile.user_id == payload.user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User target not found.")
+        
+    order = db.query(BillingOrder).filter(BillingOrder.order_id == payload.order_id).first()
+    if order:
+        order.status = "paid"
+        
+    user.is_pro = 1
+    db.commit()
+    
+    log_audit_event(
+        actor=user.username,
+        action="PLAN_UPGRADE",
+        details=f"Upgraded subscription to PRO via Order {payload.order_id}."
+    )
+    
+    return {
+        "status": "success",
+        "message": f"User '{user.username}' successfully upgraded to PRO Tier."
+    }

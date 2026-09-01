@@ -3,6 +3,7 @@ venv/
 .venv/
 env/
 ENV/
+backend/venv/
 requirements-dev.txt
 
 # Python cached files
@@ -18,12 +19,19 @@ __pycache__/
 
 # Node modules & production builds
 node_modules/
+frontend/node_modules/
 dist/
-.env
-.env.local
+frontend/dist/
+build/
 
-# ML Models & metrics binaries (auto-generated)
+# Local logs and process tracking
+logs/
+*.log
+.pids/
+
+# ML generated model binaries
 backend/app/models/
+backend/models/
 *.joblib
 *.pkl
 
@@ -32,9 +40,18 @@ backend/app/models/
 .idea/
 .DS_Store
 
-# Credentials & secrets protection
-.env.production
+# Credentials & secrets protection (STRICT)
+.env
+.env.*
+!.env.example
+!.env.production.example
+credentials/
+secrets/
 *.pem
 *.key
+*.p12
+*.pfx
 *credentials*.json
 *service-account*.json
+gcp-service-account*.json
+gcp-creds*.json

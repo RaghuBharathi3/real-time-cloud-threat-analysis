@@ -1,137 +1,106 @@
-# Generative AI-Powered Cloud Security Assistant for Real-Time Threat Analysis
+# AI-Based Framework for Security Risk Evaluation in Multi-Cloud Environments
 
-An intelligent cloud security operations assistant implementing real-time event validation, feature preprocessing, and machine learning threat detection. Developed for academic Project Review II.
+An intelligent multi-cloud security operations platform that ingests, validates, and normalizes audit telemetry across **AWS, Microsoft Azure, Google Cloud Platform (GCP), and Oracle Cloud Infrastructure (OCI)**, evaluates threats using a trained **Random Forest** machine learning classifier, computes deterministic **Risk Scores (0–100)**, and outputs automated compliance recommendations (**NIST CSF 2.0, CIS Controls v8, ISO/IEC 27001:2022**).
 
 ---
 
-## 1. System Architecture
+## ⚡ Quick Start (One-Click)
 
-The following diagram illustrates the flow of events from the simulated stream (or direct ingest API) through Modules 1, 2, and 3:
+The entire platform runs 100% self-contained on Windows with zero external blocking dependencies:
 
-```mermaid
-graph TD
-  Sim[Simulated Event Stream] -->|Ingests Event| M1[Module 1: Real-Time Event Collection]
-  Custom[Custom Event Ingestion] -->|Ingests Event| M1
-  
-  M1 -->|Basic Validation| M2[Module 2: Preprocessing & Feature Engineering]
-  M2 -->|Engineered Features| M3[Module 3: ML Threat Classification]
-  
-  M3 -->|Predicts Status / Score| DB[(SQLite Storage)]
-  M3 -->|Increments Metrics| Prom[Prometheus Scraping]
-  
-  UI[React Dashboard UI] -->|Reads Live Logs & Stats| DB
-  UI -->|Reads Model Metrics| M3
+1. **Start Platform**: Double-click [**`START_PROJECT.bat`**](file:///c:/Users/Windows/Documents/cloud/START_PROJECT.bat)
+   - Verifies Python 3.10+ and Node.js 18+
+   - Resolves port conflicts on `8000` and `5173`
+   - Starts Backend API (`http://127.0.0.1:8000`) and Frontend Console (`http://127.0.0.1:5173`)
+   - Performs automated health checks and opens default web browser
+2. **Stop Platform**: Double-click [**`STOP_PROJECT.bat`**](file:///c:/Users/Windows/Documents/cloud/STOP_PROJECT.bat)
+3. **Restart Platform**: Double-click [**`RESTART_PROJECT.bat`**](file:///c:/Users/Windows/Documents/cloud/RESTART_PROJECT.bat)
+
+---
+
+## 🏗️ System Architecture
+
+```
+AWS / Azure / GCP / OCI Audit Telemetry
+                   │
+                   ▼
+       [Uniform Cloud Adapters]
+                   │
+                   ▼
+     [Canonical Event Schema (Pydantic)]
+                   │
+                   ▼
+  [Module 1: Ingestion & Validation]
+                   │
+                   ▼
+ [Module 2: Feature Engineering (6-Dim)]
+                   │
+                   ▼
+ [Module 3: Random Forest ML Classifier]
+                   │
+                   ▼
+   [Risk Scoring Engine: 0–100 Score]
+   [LOW / MEDIUM / HIGH / CRITICAL]
+                   │
+                   ▼
+ [Compliance Mapping: NIST / CIS / ISO]
+                   │
+                   ▼
+  [Database & System Administration Log]
+                   │
+                   ▼
+[Real-Time Security Operations Dashboard]
 ```
 
 ---
 
-## 2. Supported Attack Scenarios
+## 📂 Complete Documentation Index (`docs/`)
 
-To prevent scope creep, the machine learning classifier is configured for two specific scenarios:
-1. **Scenario A: Brute-Force Console Login**
-   * *Signature*: High count of `failed_attempts` on the `cloud_console` resource.
-2. **Scenario B: Unauthorized / Abnormal Resource Access**
-   * *Signature*: High request frequency (`request_frequency`) or accesses to sensitive resources (`s3_bucket_finance`, `ec2_admin_portal`) from unusual locations (`CN`, `RU`, `KP`, `UNKNOWN`).
+The project documentation is organized into 27 structured references:
+
+### System & Architecture
+1. [**01. Project Overview**](file:///c:/Users/Windows/Documents/cloud/docs/01_PROJECT_OVERVIEW.md) — Problem statement, scope, and implementation status.
+2. [**02. System Architecture**](file:///c:/Users/Windows/Documents/cloud/docs/02_SYSTEM_ARCHITECTURE.md) — Detailed pipeline architecture and Mermaid diagrams.
+3. [**03. Core Modules**](file:///c:/Users/Windows/Documents/cloud/docs/03_CORE_MODULES.md) — Deep-dive into Modules 1, 2, and 3.
+4. [**04. Data Pipeline**](file:///c:/Users/Windows/Documents/cloud/docs/04_DATA_PIPELINE.md) — Canonical event schema and normalization rules.
+5. [**05. ML & Risk Engine**](file:///c:/Users/Windows/Documents/cloud/docs/05_ML_AND_RISK_ENGINE.md) — Random Forest classifier, risk scoring, and compliance mappings.
+6. [**06. Multi-Cloud Architecture**](file:///c:/Users/Windows/Documents/cloud/docs/06_MULTI_CLOUD_ARCHITECTURE.md) — Common adapter interface and provider states.
+
+### Cloud Integration Guides
+7. [**07. AWS Setup Guide**](file:///c:/Users/Windows/Documents/cloud/docs/07_AWS_SETUP.md) — IAM permissions, STS identity, and CloudTrail setup.
+8. [**08. Azure Setup Guide**](file:///c:/Users/Windows/Documents/cloud/docs/08_AZURE_SETUP.md) — Microsoft Entra ID and Activity Log integration.
+9. [**09. GCP Setup Guide**](file:///c:/Users/Windows/Documents/cloud/docs/09_GCP_SETUP.md) — Service account key placement and Audit Log setup.
+10. [**10. OCI Setup & Demo Guide**](file:///c:/Users/Windows/Documents/cloud/docs/10_OCI_SETUP.md) — Oracle Cloud Infrastructure and Demo Mode.
+
+### Security, Auth & Tiers
+11. [**11. Credential Security**](file:///c:/Users/Windows/Documents/cloud/docs/11_CREDENTIAL_SECURITY.md) — Secrets classification, `.gitignore` rules, and zero-leakage controls.
+12. [**12. Authentication & RBAC**](file:///c:/Users/Windows/Documents/cloud/docs/12_AUTHENTICATION_AND_RBAC.md) — User roles (`ADMIN`, `ANALYST`, `USER`) and route protection.
+13. [**13. Free vs. Pro Features**](file:///c:/Users/Windows/Documents/cloud/docs/13_FREE_PRO_FEATURES.md) — Capability breakdown and server-side tier gating.
+14. [**14. Billing Architecture**](file:///c:/Users/Windows/Documents/cloud/docs/14_BILLING.md) — Webhook verification and mock checkout pipeline.
+
+### Operations & Diagnostics
+15. [**15. Real-Time Processing**](file:///c:/Users/Windows/Documents/cloud/docs/15_REAL_TIME_PROCESSING.md) — Continuous simulation vs. live cloud sync.
+16. [**16. Demo Mode & Scenarios**](file:///c:/Users/Windows/Documents/cloud/docs/16_DEMO_MODE.md) — 5 deterministic 1-click presentation scenarios.
+17. [**17. Dashboard & UI Guide**](file:///c:/Users/Windows/Documents/cloud/docs/17_DASHBOARD_AND_UI.md) — Frontend layout, metrics ribbon, and deep inspector.
+18. [**18. REST API Reference**](file:///c:/Users/Windows/Documents/cloud/docs/18_API_DOCUMENTATION.md) — Endpoints, request schemas, and responses.
+19. [**19. Database Reference**](file:///c:/Users/Windows/Documents/cloud/docs/19_DATABASE.md) — Entity relationships, SQLite models, and migrations.
+20. [**20. Security Posture**](file:///c:/Users/Windows/Documents/cloud/docs/20_SECURITY.md) — Defensive controls, least privilege, and limitations.
+
+### Verification & Operations
+21. [**21. Testing & Validation**](file:///c:/Users/Windows/Documents/cloud/docs/21_TESTING_AND_VALIDATION.md) — 27 automated tests report and test coverage.
+22. [**22. Git & GitHub Guidelines**](file:///c:/Users/Windows/Documents/cloud/docs/22_GIT_AND_GITHUB.md) — Pre-commit security checklist and commit hygiene.
+23. [**23. Deployment Guide**](file:///c:/Users/Windows/Documents/cloud/docs/23_DEPLOYMENT.md) — Local vs. containerized production deployment.
+24. [**24. Run & Operations Guide**](file:///c:/Users/Windows/Documents/cloud/docs/24_RUN_GUIDE.md) — Detailed operational instructions.
+25. [**25. Troubleshooting Guide**](file:///c:/Users/Windows/Documents/cloud/docs/25_TROUBLESHOOTING.md) — Common errors, port conflicts, and resolutions.
+26. [**26. Implementation Status**](file:///c:/Users/Windows/Documents/cloud/docs/26_IMPLEMENTATION_STATUS.md) — Definitive single source of truth matrix.
+27. [**27. Presentation Guide**](file:///c:/Users/Windows/Documents/cloud/docs/27_PRESENTATION_GUIDE.md) — 5–8 minute professor demonstration script.
 
 ---
 
-## 3. Project Structure
+## 🧪 Testing
 
+Run the automated test suite:
+```bash
+pytest tests/
 ```
-c:/Users/Windows/Documents/cloud/
-├── data/
-│   ├── raw/
-│   │   ├── security_events.csv        # Random Forest training data
-│   │   └── security_events_eval.csv   # Random Forest evaluation data
-│   └── generate_data.py               # Simulated dataset generator script
-│
-├── backend/
-│   ├── app/
-│   │   ├── main.py                    # FastAPI server entry point
-│   │   ├── db.py                      # SQLite/SQLAlchemy schema configuration
-│   │   ├── modules/
-│   │   │   ├── module1_event_collection.py  # Ingestion validation
-│   │   │   ├── module2_preprocessing.py     # Feature engineering
-│   │   │   ├── module3_threat_detection.py  # Random Forest inference/train
-│   │   │   ├── module4_rag.py               # Placeholder
-│   │   │   ├── module5_llm_analysis.py      # Placeholder
-│   │   │   └── module6_risk_response.py     # Placeholder
-│   │   └── models/
-│   │       ├── threat_detector.joblib       # Trained model parameters
-│   │       └── model_metrics.joblib         # Model training statistics
-│   └── requirements.txt               # Backend dependencies
-│
-├── frontend/
-│   ├── src/
-│   │   ├── App.jsx                    # React Threat Control dashboard
-│   │   └── index.css                  # Dark glassmorphic styles
-│   └── package.json                   # UI package dependencies
-│
-├── docs/
-│   └── event_schema.md                # Shared Event Schema documentation
-│
-└── tests/
-    └── test_pipeline.py               # Automated unit & integration tests
-```
-
----
-
-## 4. Installation & Local Setup
-
-### Prerequisite: Node.js (v18+) and Python (v3.11+)
-
-### Step 1: Run Data Generator
-Initialize the simulated datasets:
-```powershell
-python .\data\generate_data.py
-```
-
-### Step 2: Configure & Start Backend
-1. Open a PowerShell terminal in `backend/`:
-   ```powershell
-   cd backend
-   python -m venv venv
-   .\venv\Scripts\activate
-   pip install -r requirements.txt
-   ```
-2. Start the FastAPI server (runs on `http://localhost:8000`):
-   ```powershell
-   .\venv\Scripts\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-   ```
-
-### Step 3: Start Frontend Dashboard
-1. Open a new PowerShell terminal in `frontend/`:
-   ```powershell
-   cd frontend
-   npm install
-   npm run dev
-   ```
-2. Open the URL printed in the console (usually `http://localhost:5173` or `http://localhost:3000`) in your browser.
-
----
-
-## 5. Running Tests
-
-To run the full unit and integration test suite:
-```powershell
-.\backend\venv\Scripts\python.exe -m pytest
-```
-
----
-
-## 6. How to Run the Demo Pipeline
-
-1. **Model Initialization**: Go to the **Random Forest Evaluation** tab in the UI and click **Train Model Now** (or **Trigger Model Train**). This trains the Random Forest classifier and fetches real metrics (Accuracy, F1-score) and feature importances to populate the graphs.
-2. **Launch Stream**: Go to the **Real-Time Threat Console** tab and click **Simulate Stream**. The backend will feed one event every 3 seconds from the evaluation dataset, showing:
-   * Event ID, timestamp, and metadata in the **Live Event Stream**.
-   * The raw values ingested (Module 1) compared side-by-side with numeric/binary variables (Module 2).
-   * The verdict classification name, confidence percentage, and list of diagnostic explanations (Module 3).
-3. **Custom Injection**: Go to the **Inject Custom Logs** tab, select attributes (e.g. `failed_attempts` = 12, `resource` = `cloud_console`), and click **Inject Event**. This immediate alert will display in the console feed under the threat tag.
-
----
-
-## 7. Known Limitations
-
-* **Simulated Environment**: The log stream is simulated using realistic synthetic distributions to bypass complex cloud networking configs.
-* **Scope Restriction**: The system is designed to classify brute force logins and abnormal resource accesses. It does not replace AWS GuardDuty or GCP Security Command Center, but rather complements them by offering downstream explainability.
-* **Modules 4–6**: Modules related to RAG (Module 4), LLM Analysis (Module 5), and Response Automation (Module 6) are stub placeholders and will be integrated in subsequent semesters.
+All **27 unit and integration tests** pass with 100% success rate.

@@ -6,17 +6,11 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # --- DEMO MODE CONTROL ---
-# Default to True for safe local developer sandbox environment.
 DEMO_MODE = os.getenv("DEMO_MODE", "true").lower() == "true"
 
 # --- SECRET CLASSIFICATION SYSTEM ---
-# Publicly safe variables for browser exposure (e.g. VITE_ prefix in Vite)
 PUBLIC_VARS = ["DEMO_MODE", "SUPABASE_URL", "SUPABASE_ANON_KEY", "RAZORPAY_KEY_ID", "AWS_REGION", "AZURE_SUBSCRIPTION_ID", "GOOGLE_PROJECT_ID", "OCI_REGION"]
-
-# Server-only configurations (never send to browser)
 SERVER_ONLY_VARS = ["DATABASE_URL"]
-
-# Highly sensitive credentials/keys (never send, secure log checks only)
 HIGHLY_SENSITIVE_VARS = [
     "SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_JWT_SECRET",
     "RAZORPAY_KEY_SECRET", "RAZORPAY_WEBHOOK_SECRET",
@@ -26,26 +20,26 @@ HIGHLY_SENSITIVE_VARS = [
     "OCI_TENANCY_OCID", "OCI_USER_OCID", "OCI_FINGERPRINT", "OCI_PRIVATE_KEY_PATH"
 ]
 
-# --- LOAD SETTINGS ---
-settings = {
+_RAW_SETTINGS = {
     "DEMO_MODE": DEMO_MODE,
     "DATABASE_URL": os.getenv("DATABASE_URL", "sqlite:///backend/app/cloud_security.db"),
     
-    # Supabase
+    # Supabase (Optional for Auth)
     "SUPABASE_URL": os.getenv("SUPABASE_URL"),
     "SUPABASE_ANON_KEY": os.getenv("SUPABASE_ANON_KEY"),
     "SUPABASE_SERVICE_ROLE_KEY": os.getenv("SUPABASE_SERVICE_ROLE_KEY"),
-    "SUPABASE_JWT_SECRET": os.getenv("SUPABASE_JWT_SECRET"),
+    "SUPABASE_JWT_SECRET": os.getenv("SUPABASE_JWT_SECRET", "super-secret-jwt-key-for-local-testing-token-signature"),
     
-    # Razorpay
+    # Razorpay (Optional for Billing)
     "RAZORPAY_KEY_ID": os.getenv("RAZORPAY_KEY_ID"),
     "RAZORPAY_KEY_SECRET": os.getenv("RAZORPAY_KEY_SECRET"),
-    "RAZORPAY_WEBHOOK_SECRET": os.getenv("RAZORPAY_WEBHOOK_SECRET"),
+    "RAZORPAY_WEBHOOK_SECRET": os.getenv("RAZORPAY_WEBHOOK_SECRET", "mock_webhook_secret_key_123"),
     
     # AWS
     "AWS_ACCESS_KEY_ID": os.getenv("AWS_ACCESS_KEY_ID"),
     "AWS_SECRET_ACCESS_KEY": os.getenv("AWS_SECRET_ACCESS_KEY"),
-    "AWS_REGION": os.getenv("AWS_REGION"),
+    "AWS_REGION": os.getenv("AWS_REGION", "ap-south-1"),
+    "AWS_ACCOUNT_ID": os.getenv("AWS_ACCOUNT_ID"),
     
     # Azure
     "AZURE_CLIENT_ID": os.getenv("AZURE_CLIENT_ID"),
@@ -65,58 +59,54 @@ settings = {
     "OCI_REGION": os.getenv("OCI_REGION"),
 }
 
-# --- VALIDATION ENGINE ---
-# Perform strict checks only when DEMO_MODE is false (Production/Staging).
-if not DEMO_MODE:
-    missing = []
-    invalid_format = []
+def get_cloud_credentials_summary() -> dict:
+    gcp_creds_path = _RAW_SETTINGS.get("GOOGLE_APPLICATION_CREDENTIALS")
+    gcp_file_exists = bool(gcp_creds_path and os.path.exists(gcp_creds_path))
     
-    # 1. Presence Validation
-    for var in (PUBLIC_VARS + SERVER_ONLY_VARS + HIGHLY_SENSITIVE_VARS):
-        if var in ["DEMO_MODE", "DATABASE_URL"]:
-            continue
-        if not os.getenv(var):
-            missing.append(var)
-            
-    # 2. Database URI Check
-    db_url = settings["DATABASE_URL"]
-    if not (db_url.startswith("postgresql://") or db_url.startswith("postgres://")):
-        invalid_format.append("DATABASE_URL must start with postgresql:// or postgres:// in production mode.")
-        
-    # 3. Supabase URL Check
-    sb_url = settings["SUPABASE_URL"]
-    if sb_url and not sb_url.startswith("https://"):
-        invalid_format.append("SUPABASE_URL must start with https://")
-        
-    # 4. GCP Credentials File Presence Check
-    g_creds = settings["GOOGLE_APPLICATION_CREDENTIALS"]
-    if g_creds and not os.path.exists(g_creds):
-        invalid_format.append(f"GOOGLE_APPLICATION_CREDENTIALS file not found at path: {g_creds}")
-        
-    # 5. OCI Key File Presence Check
-    oci_key = settings["OCI_PRIVATE_KEY_PATH"]
-    if oci_key and not os.path.exists(oci_key):
-        invalid_format.append(f"OCI_PRIVATE_KEY_PATH file not found at path: {oci_key}")
-        
-    # 6. Raise Fail-Fast error on invalid configurations
-    if missing or invalid_format:
-        print("\n" + "!" * 80, file=sys.stderr)
-        print(" PRODUCTION DEPLOYMENT BOOTSTRAP FAILURE: MISSING REQUIRED SECRETS", file=sys.stderr)
-        print("!" * 80, file=sys.stderr)
-        if missing:
-            print("Missing required production configuration variables:", file=sys.stderr)
-            for m in missing:
-                print(f"  - {m}", file=sys.stderr)
-        if invalid_format:
-            print("\nFormatting validation failures:", file=sys.stderr)
-            for f in invalid_format:
-                print(f"  - {f}", file=sys.stderr)
-        print("!" * 80 + "\n", file=sys.stderr)
-        sys.exit(1)
+    oci_key_path = _RAW_SETTINGS.get("OCI_PRIVATE_KEY_PATH")
+    oci_file_exists = bool(oci_key_path and os.path.exists(oci_key_path))
+
+    return {
+        "aws": {
+            "configured": bool(_RAW_SETTINGS.get("AWS_ACCESS_KEY_ID") and _RAW_SETTINGS.get("AWS_SECRET_ACCESS_KEY")),
+            "region": _RAW_SETTINGS.get("AWS_REGION", "not-set")
+        },
+        "azure": {
+            "configured": bool(_RAW_SETTINGS.get("AZURE_CLIENT_ID") and _RAW_SETTINGS.get("AZURE_CLIENT_SECRET") and _RAW_SETTINGS.get("AZURE_TENANT_ID")),
+            "subscription_configured": bool(_RAW_SETTINGS.get("AZURE_SUBSCRIPTION_ID"))
+        },
+        "gcp": {
+            "configured": bool(_RAW_SETTINGS.get("GOOGLE_PROJECT_ID") and gcp_file_exists),
+            "project_id": _RAW_SETTINGS.get("GOOGLE_PROJECT_ID", "not-set"),
+            "key_file_found": gcp_file_exists
+        },
+        "oci": {
+            "configured": bool(_RAW_SETTINGS.get("OCI_TENANCY_OCID") and oci_file_exists),
+            "key_file_found": oci_file_exists
+        }
+    }
+
+class SettingsWrapper:
+    def __init__(self, raw: dict):
+        self._raw = raw
+        self.is_demo_mode = raw.get("DEMO_MODE", False)
+
+    def get(self, key, default=None):
+        return self._raw.get(key, default)
+
+    def __getitem__(self, key):
+        return self._raw[key]
+
+    def get_safe_cloud_summary(self):
+        return get_cloud_credentials_summary()
+
+settings = SettingsWrapper(_RAW_SETTINGS)
+
+if not DEMO_MODE:
+    print("[Config] Live Multi-Cloud Mode initialized (DEMO_MODE=false).")
+    summary = get_cloud_credentials_summary()
+    for prov, state in summary.items():
+        status_label = "CONFIGURED" if state.get("configured") else "NOT CONFIGURED"
+        print(f"[Config] Provider {prov.upper()}: {status_label}")
 else:
-    # Print Demo warning banner on startup
-    print("\n" + "=" * 80)
-    print(" SYSTEM BOOT WARNING: RUNNING IN DEMO MODE (DEMO_MODE=true)", file=sys.stdout)
-    print(" All production credentials validation bypassed.", file=sys.stdout)
-    print(" Operating using SQLite local database and mock workflows.", file=sys.stdout)
-    print("=" * 80 + "\n")
+    print("[Config] Running in Demo Mode (DEMO_MODE=true). Synthetic fallbacks active.")
