@@ -105,11 +105,86 @@ class GCPAdapter(BaseCloudAdapter):
                 "last_checked": self.last_check_time
             }
 
-    def collect_events(self, limit: int = 10) -> List[Dict[str, Any]]:
+    def collect_events(self, limit: int = 10, lookback_minutes: int = 60) -> List[Dict[str, Any]]:
         """
-        Collects GCP Cloud Audit Log events.
+        Collects GCP Cloud Audit Log events within lookback window.
+        Uses Google Cloud Logging API or synthetic fallbacks.
         """
-        events = self._generate_live_sample_events(limit)
+        self.last_attempted_collection = datetime.now(timezone.utc).isoformat()
+        events = []
+
+        if self.is_configured():
+            try:
+                if self.connect() and self._credentials:
+                    import urllib.request
+                    import json
+                    from datetime import timedelta
+
+                    start_time = datetime.now(timezone.utc) - timedelta(minutes=lookback_minutes)
+                    req_obj = Request()
+                    self._credentials.refresh(req_obj)
+                    token = self._credentials.token
+
+                    url = "https://logging.googleapis.com/v2/entries:list"
+                    payload = {
+                        "resourceNames": [f"projects/{self.project_id}"],
+                        "pageSize": limit,
+                        "orderBy": "timestamp desc",
+                        "filter": f'timestamp >= "{start_time.strftime("%Y-%m-%dT%H:%M:%SZ")}"'
+                    }
+
+                    req = urllib.request.Request(
+                        url,
+                        data=json.dumps(payload).encode("utf-8"),
+                        headers={
+                            "Authorization": f"Bearer {token}",
+                            "Content-Type": "application/json"
+                        },
+                        method="POST"
+                    )
+
+                    try:
+                        with urllib.request.urlopen(req, timeout=8) as resp:
+                            if resp.status == 200:
+                                data = json.loads(resp.read().decode("utf-8"))
+                                raw_entries = data.get("entries", [])
+                                for raw in raw_entries:
+                                    norm = self.normalize_event(raw)
+                                    norm["source_mode"] = "REAL"
+                                    events.append(norm)
+
+                                self.last_status = "CONNECTED"
+                                self.last_error = None
+                                self.last_successful_collection = self.last_attempted_collection
+                                self.source_mode = "REAL"
+                                self.new_events_last_sync = len(events)
+                                if len(events) == 0:
+                                    self.last_collection_message = f"Cloud Logging active: 0 audit logs found in last {lookback_minutes}m (Project idle)."
+                                else:
+                                    self.last_collection_message = f"Successfully collected {len(events)} GCP Cloud Audit log entries."
+                    except urllib.error.HTTPError as http_err:
+                        if http_err.code in [401, 403]:
+                            self.last_status = "INSUFFICIENT_PERMISSIONS"
+                            self.last_error = f"PermissionDenied (HTTP {http_err.code}): Service Account lacks roles/logging.viewer or Cloud Logging API disabled."
+                            self.last_collection_message = "Collection failed: Enable Cloud Logging API and grant Logs Viewer role to Service Account."
+                        else:
+                            self.last_status = "FAILED"
+                            self.last_error = f"Google Cloud Logging HTTP Error: {http_err.code}"
+                            self.last_collection_message = f"Collection failed: {self.last_error}"
+            except Exception as e:
+                self.last_status = "FAILED"
+                self.last_error = str(e)
+                self.last_collection_message = f"Collection error: {str(e)}"
+
+        if not events:
+            if settings.is_demo_mode or not self.is_configured():
+                events = self._generate_live_sample_events(limit)
+                for ev in events:
+                    ev["source_mode"] = "DEMO"
+                self.source_mode = "DEMO"
+                if not self.last_collection_message:
+                    self.last_collection_message = f"Generated {len(events)} synthetic events (Demo Mode)."
+
         self.events_collected_count += len(events)
         return events
 
@@ -117,7 +192,7 @@ class GCPAdapter(BaseCloudAdapter):
         """
         Normalizes Google Cloud Audit log payload into Canonical Event Schema.
         """
-        if "cloud_provider" in raw_event and "event_type" in raw_event:
+        if "cloud_provider" in raw_event and "event_type" in raw_event and "ip_address" in raw_event:
             return raw_event
 
         event_id = raw_event.get("insertId") or raw_event.get("id") or f"GCP-{uuid.uuid4().hex[:8].upper()}"
@@ -149,7 +224,8 @@ class GCPAdapter(BaseCloudAdapter):
             "location": "US",
             "failed_attempts": int(raw_event.get("failed_attempts", 0)),
             "resource": resource,
-            "request_frequency": int(raw_event.get("request_frequency", 1))
+            "request_frequency": int(raw_event.get("request_frequency", 1)),
+            "source_mode": raw_event.get("source_mode", "REAL")
         }
 
     def _is_valid_ipv4(self, ip: str) -> bool:

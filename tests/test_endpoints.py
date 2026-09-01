@@ -114,7 +114,10 @@ def test_cloud_sync_endpoint(client):
         assert response.status_code == 200
         data = response.json()
         assert data["provider"] == provider
-        assert data["synced_count"] >= 1
+        assert data["synced_count"] >= 0
+        assert "new_inserted_count" in data
+        assert "skipped_duplicates_count" in data
+        assert "source_mode" in data
 
 def test_alerts_endpoint(client):
     response = client.get("/api/v1/alerts?limit=10", headers={"X-User-ID": "usr_admin"})
@@ -127,3 +130,16 @@ def test_alerts_endpoint(client):
         assert "risk_score" in alert
         assert "severity" in alert
         assert "compliance" in alert
+        assert "source_mode" in alert
+
+def test_rate_limiter_enforcement(client):
+    # ML retrain limit is 5 req/min. Triggering 6 consecutive requests must yield HTTP 429.
+    rate_limited = False
+    for i in range(8):
+        res = client.post("/api/v1/model/train", headers={"X-User-ID": "usr_admin"})
+        if res.status_code == 429:
+            rate_limited = True
+            assert "Rate limit exceeded" in res.json().get("detail", "")
+            assert "Retry-After" in res.headers
+            break
+    assert rate_limited, "Rate limiter should have triggered HTTP 429 after exceeding quota"

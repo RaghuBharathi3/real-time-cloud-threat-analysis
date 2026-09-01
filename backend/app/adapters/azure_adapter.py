@@ -107,11 +107,85 @@ class AzureAdapter(BaseCloudAdapter):
                 "last_checked": self.last_check_time
             }
 
-    def collect_events(self, limit: int = 10) -> List[Dict[str, Any]]:
+    def collect_events(self, limit: int = 10, lookback_minutes: int = 60) -> List[Dict[str, Any]]:
         """
-        Collects Azure Activity and Entra ID security events.
+        Collects Azure Activity and Entra ID security events within lookback window.
+        Uses Azure Resource Manager / Insights REST API or synthetic fallbacks.
         """
-        events = self._generate_live_sample_events(limit)
+        self.last_attempted_collection = datetime.now(timezone.utc).isoformat()
+        events = []
+
+        if self.is_configured():
+            try:
+                # Attempt to query Azure Monitor Activity Log REST API if subscription is configured
+                if self.subscription_id and self._credential:
+                    import urllib.request
+                    import json
+                    from datetime import timedelta
+                    
+                    start_time = datetime.now(timezone.utc) - timedelta(minutes=lookback_minutes)
+                    token = self._credential.get_token("https://management.azure.com/.default")
+                    
+                    filter_str = f"eventTimestamp ge '{start_time.strftime('%Y-%m-%dT%H:%M:%SZ')}'"
+                    encoded_filter = urllib.parse.quote(filter_str)
+                    url = f"https://management.azure.com/subscriptions/{self.subscription_id}/providers/Microsoft.Insights/eventtypes/management/values?api-version=2015-04-01&$filter={encoded_filter}"
+                    
+                    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token.token}"})
+                    try:
+                        with urllib.request.urlopen(req, timeout=8) as resp:
+                            if resp.status == 200:
+                                data = json.loads(resp.read().decode("utf-8"))
+                                raw_vals = data.get("value", [])[:limit]
+                                for raw in raw_vals:
+                                    norm = self.normalize_event(raw)
+                                    norm["source_mode"] = "REAL"
+                                    events.append(norm)
+                                
+                                self.last_status = "CONNECTED"
+                                self.last_error = None
+                                self.last_successful_collection = self.last_attempted_collection
+                                self.source_mode = "REAL"
+                                self.new_events_last_sync = len(events)
+                                if len(events) == 0:
+                                    self.last_collection_message = f"Azure Monitor active: 0 events found in last {lookback_minutes}m (Subscription idle)."
+                                else:
+                                    self.last_collection_message = f"Successfully collected {len(events)} Azure Activity Log events."
+                    except urllib.error.HTTPError as http_err:
+                        if http_err.code in [401, 403]:
+                            self.last_status = "INSUFFICIENT_PERMISSIONS"
+                            self.last_error = f"AuthorizationFailed (HTTP {http_err.code}): Service Principal lacks Reader role on subscription."
+                            self.last_collection_message = "Collection failed: Service Principal requires Reader role on Azure subscription."
+                        else:
+                            self.last_status = "FAILED"
+                            self.last_error = f"Azure Activity Log HTTP Error: {http_err.code}"
+                            self.last_collection_message = f"Collection failed: {self.last_error}"
+                else:
+                    self.last_status = "CONNECTED"
+                    self.last_collection_message = "Azure Entra authenticated (Subscription ID not set for log collection)."
+            except Exception as e:
+                err_str = str(e)
+                if "AADSTS9002332" in err_str or "AADSTS9002346" in err_str or "consumers" in err_str:
+                    self.last_status = "INSUFFICIENT_PERMISSIONS"
+                    self.last_error = "Entra ID App Registration is Personal Account type (/consumers). ARM Activity Logs require an organizational App Registration with Reader role on the subscription."
+                    self.last_collection_message = "Collection requires organizational App Registration with Reader role on Azure subscription."
+                elif "AADSTS700016" in err_str or "AADSTS7000215" in err_str:
+                    self.last_status = "INVALID"
+                    self.last_error = "Invalid Azure Client Secret or Application ID."
+                    self.last_collection_message = "Collection failed: Invalid Azure credentials."
+                else:
+                    self.last_status = "FAILED"
+                    self.last_error = err_str
+                    self.last_collection_message = f"Collection error: {err_str}"
+
+        if not events:
+            if settings.is_demo_mode or not self.is_configured():
+                events = self._generate_live_sample_events(limit)
+                for ev in events:
+                    ev["source_mode"] = "DEMO"
+                self.source_mode = "DEMO"
+                if not self.last_collection_message:
+                    self.last_collection_message = f"Generated {len(events)} synthetic events (Demo Mode)."
+
         self.events_collected_count += len(events)
         return events
 
@@ -119,7 +193,7 @@ class AzureAdapter(BaseCloudAdapter):
         """
         Normalizes Azure Activity Log event to Canonical Event Schema.
         """
-        if "cloud_provider" in raw_event and "event_type" in raw_event:
+        if "cloud_provider" in raw_event and "event_type" in raw_event and "ip_address" in raw_event:
             return raw_event
 
         event_id = raw_event.get("id") or raw_event.get("correlationId") or f"AZ-{uuid.uuid4().hex[:8].upper()}"
@@ -154,7 +228,8 @@ class AzureAdapter(BaseCloudAdapter):
             "location": "US",
             "failed_attempts": int(raw_event.get("failed_attempts", 0)),
             "resource": resource,
-            "request_frequency": int(raw_event.get("request_frequency", 1))
+            "request_frequency": int(raw_event.get("request_frequency", 1)),
+            "source_mode": raw_event.get("source_mode", "REAL")
         }
 
     def _is_valid_ipv4(self, ip: str) -> bool:

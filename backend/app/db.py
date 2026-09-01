@@ -42,6 +42,7 @@ class SecurityAlert(Base):
     severity = Column(String, default="LOW")
     reasons = Column(Text)
     compliance_recommendations = Column(Text, default="{}")
+    source_mode = Column(String, default="DEMO", index=True) # REAL or DEMO
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 class UserProfile(Base):
@@ -89,6 +90,8 @@ def migrate_db():
                     conn.exec_driver_sql("ALTER TABLE security_alerts ADD COLUMN severity VARCHAR DEFAULT 'LOW';")
                 if "compliance_recommendations" not in cols:
                     conn.exec_driver_sql("ALTER TABLE security_alerts ADD COLUMN compliance_recommendations TEXT DEFAULT '{}';")
+                if "source_mode" not in cols:
+                    conn.exec_driver_sql("ALTER TABLE security_alerts ADD COLUMN source_mode VARCHAR DEFAULT 'DEMO';")
                 if "created_at" not in cols:
                     conn.exec_driver_sql("ALTER TABLE security_alerts ADD COLUMN created_at DATETIME;")
                 conn.commit()

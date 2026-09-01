@@ -71,6 +71,9 @@ export default function App() {
   const [filterProvider, setFilterProvider] = useState('ALL');
   const [filterSeverity, setFilterSeverity] = useState('ALL');
   const [filterThreat, setFilterThreat] = useState('ALL');
+  const [filterSourceMode, setFilterSourceMode] = useState('ALL'); // 'ALL' | 'REAL' | 'DEMO'
+  const [syncLookback, setSyncLookback] = useState(60); // lookback in minutes
+  const [isSyncing, setIsSyncing] = useState({});
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
 
@@ -287,21 +290,31 @@ export default function App() {
   // Sync Cloud Logs
   const handleSyncLogs = async (provider) => {
     try {
-      showToast(`Syncing audit telemetry from ${provider.toUpperCase()}...`, 'warning');
-      const res = await fetch(`${API_BASE}/api/v1/cloud/sync/${provider}?limit=5`, {
+      setIsSyncing(prev => ({ ...prev, [provider]: true }));
+      showToast(`Polling telemetry from ${provider.toUpperCase()} (Lookback: ${syncLookback}m)...`, 'warning');
+      const res = await fetch(`${API_BASE}/api/v1/cloud/sync/${provider}?limit=10&lookback_minutes=${syncLookback}`, {
         method: 'POST',
         headers: { 'X-User-ID': activeUser.user_id }
       });
       if (res.ok) {
         const data = await res.json();
-        fetchAlerts();
-        showToast(`Synchronized ${data.synced_count} events from ${provider.toUpperCase()}`, 'success');
+        await fetchAlerts();
+        await fetchCloudStatus(true);
+        if (data.new_inserted_count > 0) {
+          showToast(`${provider.toUpperCase()}: ${data.new_inserted_count} new events ingested (${data.skipped_duplicates_count} duplicates skipped).`, 'success');
+        } else if (data.skipped_duplicates_count > 0) {
+          showToast(`${provider.toUpperCase()}: All ${data.skipped_duplicates_count} events already ingested (Deduplication active).`, 'warning');
+        } else {
+          showToast(`${provider.toUpperCase()}: ${data.message || '0 events found in time window.'}`, 'warning');
+        }
       } else {
         const err = await res.json();
         showToast(err.detail || 'Sync failed: Pro tier required', 'error');
       }
     } catch {
       showToast('Network error during log sync.', 'error');
+    } finally {
+      setIsSyncing(prev => ({ ...prev, [provider]: false }));
     }
   };
 
@@ -400,10 +413,11 @@ export default function App() {
       const matchProvider = filterProvider === 'ALL' || alert.cloud_provider?.toLowerCase() === filterProvider.toLowerCase();
       const matchSeverity = filterSeverity === 'ALL' || alert.severity?.toUpperCase() === filterSeverity.toUpperCase();
       const matchThreat = filterThreat === 'ALL' || alert.threat_type?.toLowerCase().includes(filterThreat.toLowerCase());
+      const matchSource = filterSourceMode === 'ALL' || (alert.source_mode || 'DEMO').toUpperCase() === filterSourceMode.toUpperCase();
 
-      return matchSearch && matchProvider && matchSeverity && matchThreat;
+      return matchSearch && matchProvider && matchSeverity && matchThreat && matchSource;
     });
-  }, [alerts, searchQuery, filterProvider, filterSeverity, filterThreat]);
+  }, [alerts, searchQuery, filterProvider, filterSeverity, filterThreat, filterSourceMode]);
 
   // Paginated alerts
   const paginatedAlerts = useMemo(() => {
@@ -421,10 +435,11 @@ export default function App() {
     const high = alerts.filter(a => a.severity === 'HIGH').length;
     const med = alerts.filter(a => a.severity === 'MEDIUM').length;
     const low = alerts.filter(a => a.severity === 'LOW').length;
+    const realEvents = alerts.filter(a => (a.source_mode || '').toUpperCase() === 'REAL').length;
     const avgRisk = total > 0 ? Math.round(alerts.reduce((acc, a) => acc + (a.risk_score || 0), 0) / total) : 0;
     const connectedClouds = Object.values(cloudStatuses).filter(s => s.status === 'CONNECTED' || s.status === 'DEMO MODE').length;
 
-    return { total, threats, critical, high, med, low, avgRisk, connectedClouds };
+    return { total, threats, critical, high, med, low, realEvents, avgRisk, connectedClouds };
   }, [alerts, cloudStatuses]);
 
   // Helpers for Badges
@@ -443,6 +458,14 @@ export default function App() {
     if (p === 'gcp') return <span className="badge badge-gcp">GCP</span>;
     if (p === 'oci') return <span className="badge badge-oci">OCI</span>;
     return <span className="badge badge-neutral">{provider.toUpperCase()}</span>;
+  };
+
+  const getSourceBadge = (sourceMode) => {
+    const isReal = (sourceMode || '').toUpperCase() === 'REAL';
+    if (isReal) {
+      return <span className="badge badge-real">REAL</span>;
+    }
+    return <span className="badge badge-demo">DEMO</span>;
   };
 
   // Parse parsed JSON helper
@@ -897,6 +920,17 @@ export default function App() {
                     <option value="Unauthorized">Unauthorized Access</option>
                     <option value="Normal">Normal Events</option>
                   </select>
+
+                  <select 
+                    value={filterSourceMode} 
+                    onChange={(e) => { setFilterSourceMode(e.target.value); setCurrentPage(1); }}
+                    className="select-compact"
+                    style={{ borderColor: filterSourceMode === 'REAL' ? 'var(--status-low)' : 'var(--border-subtle)' }}
+                  >
+                    <option value="ALL">All Sources (Real + Demo)</option>
+                    <option value="REAL">Real Telemetry Only</option>
+                    <option value="DEMO">Demo Scenarios Only</option>
+                  </select>
                 </div>
 
                 <div className="text-[11.5px] text-slate-400 font-mono">
@@ -920,6 +954,7 @@ export default function App() {
                       <table className="enterprise-table">
                         <thead>
                           <tr>
+                            <th>Source</th>
                             <th>Cloud</th>
                             <th>Event ID</th>
                             <th>Timestamp</th>
@@ -935,6 +970,7 @@ export default function App() {
                               onClick={() => setSelectedAlert(alert)}
                               className={selectedAlert?.event_id === alert.event_id ? 'selected' : ''}
                             >
+                              <td>{getSourceBadge(alert.source_mode)}</td>
                               <td>{getProviderBadge(alert.cloud_provider)}</td>
                               <td style={{ fontFamily: 'var(--font-mono)', fontWeight: '600' }}>{alert.event_id}</td>
                               <td style={{ color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
@@ -992,8 +1028,11 @@ export default function App() {
                   <div className="inspector-panel">
                     <div className="inspector-header">
                       <div>
-                        <div style={{ fontSize: '13px', fontWeight: '600' }}>Event Diagnostics Inspector</div>
-                        <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <span style={{ fontSize: '13px', fontWeight: '600' }}>Event Diagnostics Inspector</span>
+                          {getSourceBadge(selectedAlert.source_mode)}
+                        </div>
+                        <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', marginTop: '2px' }}>
                           ID: {selectedAlert.event_id} | {selectedAlert.cloud_provider?.toUpperCase()}
                         </div>
                       </div>
@@ -1182,13 +1221,28 @@ export default function App() {
             <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-md)' }}>
               <div className="page-header">
                 <div className="page-title-group">
-                  <h2>Cloud Provider Connectors</h2>
-                  <p>Manage authentication credentials, inspect telemetry status, and trigger audit syncs.</p>
+                  <h2>Cloud Provider Connectors & Telemetry Engine</h2>
+                  <p>Configure provider credentials, monitor collection status, and trigger on-demand log synchronization.</p>
                 </div>
-                <button onClick={() => fetchCloudStatus(true)} className="btn btn-secondary">
-                  <RefreshCw className="w-3.5 h-3.5" />
-                  Test All Connectors
-                </button>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <span style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>Lookback Window:</span>
+                    <select
+                      value={syncLookback}
+                      onChange={(e) => setSyncLookback(Number(e.target.value))}
+                      className="select-compact"
+                    >
+                      <option value={15}>Last 15 minutes</option>
+                      <option value={60}>Last 1 hour</option>
+                      <option value={360}>Last 6 hours</option>
+                      <option value={1440}>Last 24 hours</option>
+                    </select>
+                  </div>
+                  <button onClick={() => fetchCloudStatus(true)} className="btn btn-secondary">
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    Test All Connectors
+                  </button>
+                </div>
               </div>
 
               <div className="cloud-grid">
@@ -1200,11 +1254,18 @@ export default function App() {
                         <span className="badge badge-aws">AWS</span>
                         Amazon Web Services
                       </span>
-                      {cloudStatuses.aws?.status === 'CONNECTED' ? (
-                        <span className="badge badge-low">CONNECTED</span>
-                      ) : (
-                        <span className="badge badge-neutral">{cloudStatuses.aws?.status || 'NOT CONFIGURED'}</span>
-                      )}
+                      <div style={{ display: 'flex', gap: '4px' }}>
+                        {cloudStatuses.aws?.status === 'CONNECTED' ? (
+                          <span className="badge badge-low">CONNECTED</span>
+                        ) : cloudStatuses.aws?.status === 'INSUFFICIENT_PERMISSIONS' ? (
+                          <span className="badge badge-crit">INSUFFICIENT PERMS</span>
+                        ) : (
+                          <span className="badge badge-neutral">{cloudStatuses.aws?.status || 'NOT CONFIGURED'}</span>
+                        )}
+                        <span className={`badge ${cloudStatuses.aws?.source_mode === 'REAL' ? 'badge-real' : 'badge-demo'}`}>
+                          {cloudStatuses.aws?.source_mode === 'REAL' ? 'REAL DATA' : 'DEMO MODE'}
+                        </span>
+                      </div>
                     </div>
                     
                     <div className="cloud-meta-list">
@@ -1213,26 +1274,40 @@ export default function App() {
                         <span>{cloudStatuses.aws?.region || 'ap-south-1'}</span>
                       </div>
                       <div className="cloud-meta-item">
-                        <span>STS Identity:</span>
-                        <span>{cloudStatuses.aws?.account_id ? `Account: ${cloudStatuses.aws.account_id}` : 'Verified'}</span>
+                        <span>Identity / Account:</span>
+                        <span>{cloudStatuses.aws?.account_id ? `Account: ${cloudStatuses.aws.account_id}` : 'STS Verified'}</span>
                       </div>
                       <div className="cloud-meta-item">
                         <span>Telemetry Source:</span>
-                        <span>AWS CloudTrail</span>
+                        <span>AWS CloudTrail (lookup_events)</span>
                       </div>
                       <div className="cloud-meta-item">
-                        <span>IAM Permissions:</span>
-                        <span>SecurityAudit (Read-Only)</span>
+                        <span>Last Sync Status:</span>
+                        <span style={{ color: cloudStatuses.aws?.error ? 'var(--status-crit)' : 'var(--text-main)', maxWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {cloudStatuses.aws?.last_collection_message || (cloudStatuses.aws?.error ? 'AccessDenied' : 'Ready')}
+                        </span>
+                      </div>
+                      <div className="cloud-meta-item">
+                        <span>Events Ingested:</span>
+                        <span style={{ fontFamily: 'var(--font-mono)', fontWeight: '600' }}>
+                          {cloudStatuses.aws?.events_processed || 0}
+                        </span>
                       </div>
                     </div>
                   </div>
 
                   <div className="cloud-actions">
                     <button onClick={() => handleTestConnection('aws')} className="btn btn-subtle btn-sm" style={{ flex: 1 }}>
-                      Test Connection
+                      Test Identity
                     </button>
-                    <button onClick={() => handleSyncLogs('aws')} className="btn btn-primary btn-sm" style={{ flex: 1 }}>
-                      Sync CloudTrail Logs
+                    <button 
+                      onClick={() => handleSyncLogs('aws')} 
+                      disabled={isSyncing.aws}
+                      className="btn btn-primary btn-sm" 
+                      style={{ flex: 1 }}
+                    >
+                      <RefreshCw className={`w-3 h-3 ${isSyncing.aws ? 'animate-spin' : ''}`} />
+                      {isSyncing.aws ? 'Syncing...' : 'Sync CloudTrail'}
                     </button>
                   </div>
                 </div>
@@ -1245,44 +1320,60 @@ export default function App() {
                         <span className="badge badge-azure">AZURE</span>
                         Microsoft Azure
                       </span>
-                      {cloudStatuses.azure?.status === 'CONNECTED' ? (
-                        <span className="badge badge-low">CONNECTED</span>
-                      ) : (
-                        <span className="badge badge-neutral">{cloudStatuses.azure?.status || 'NOT CONFIGURED'}</span>
-                      )}
+                      <div style={{ display: 'flex', gap: '4px' }}>
+                        {cloudStatuses.azure?.status === 'CONNECTED' ? (
+                          <span className="badge badge-low">CONNECTED</span>
+                        ) : cloudStatuses.azure?.status === 'INSUFFICIENT_PERMISSIONS' ? (
+                          <span className="badge badge-crit">INSUFFICIENT PERMS</span>
+                        ) : (
+                          <span className="badge badge-neutral">{cloudStatuses.azure?.status || 'NOT CONFIGURED'}</span>
+                        )}
+                        <span className={`badge ${cloudStatuses.azure?.source_mode === 'REAL' ? 'badge-real' : 'badge-demo'}`}>
+                          {cloudStatuses.azure?.source_mode === 'REAL' ? 'REAL DATA' : 'DEMO MODE'}
+                        </span>
+                      </div>
                     </div>
                     
                     <div className="cloud-meta-list">
                       <div className="cloud-meta-item">
                         <span>Authentication:</span>
-                        <span>Microsoft Entra ID / Graph</span>
+                        <span>Microsoft Entra ID (OAuth2)</span>
                       </div>
                       <div className="cloud-meta-item">
-                        <span>Scope:</span>
-                        <span>{cloudStatuses.azure?.scope || 'User.Read, AuditLog.Read'}</span>
+                        <span>Target Subscription:</span>
+                        <span>cloud-security-student-azure</span>
                       </div>
                       <div className="cloud-meta-item">
                         <span>Telemetry Source:</span>
-                        <span>Azure Activity Logs</span>
+                        <span>Azure Monitor / Activity Log</span>
                       </div>
                       <div className="cloud-meta-item">
-                        <span>Subscription:</span>
-                        <span>Configured</span>
+                        <span>Last Sync Status:</span>
+                        <span style={{ color: cloudStatuses.azure?.error ? 'var(--status-crit)' : 'var(--text-main)', maxWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {cloudStatuses.azure?.last_collection_message || (cloudStatuses.azure?.error ? 'Unauthorized' : 'Ready')}
+                        </span>
+                      </div>
+                      <div className="cloud-meta-item">
+                        <span>Events Ingested:</span>
+                        <span style={{ fontFamily: 'var(--font-mono)', fontWeight: '600' }}>
+                          {cloudStatuses.azure?.events_processed || 0}
+                        </span>
                       </div>
                     </div>
                   </div>
 
                   <div className="cloud-actions">
                     <button onClick={() => handleTestConnection('azure')} className="btn btn-subtle btn-sm" style={{ flex: 1 }}>
-                      Test Connection
+                      Test Token
                     </button>
                     <button 
                       onClick={() => handleSyncLogs('azure')} 
-                      disabled={activeUser.is_pro !== 1 && activeUser.role !== 'ADMIN'}
+                      disabled={isSyncing.azure || (activeUser.is_pro !== 1 && activeUser.role !== 'ADMIN')}
                       className={`btn btn-primary btn-sm ${activeUser.is_pro !== 1 && activeUser.role !== 'ADMIN' ? 'btn-disabled' : ''}`}
                       style={{ flex: 1 }}
                     >
-                      Sync Activity Logs
+                      <RefreshCw className={`w-3 h-3 ${isSyncing.azure ? 'animate-spin' : ''}`} />
+                      {isSyncing.azure ? 'Syncing...' : 'Sync Activity Log'}
                     </button>
                   </div>
                 </div>
@@ -1295,44 +1386,60 @@ export default function App() {
                         <span className="badge badge-gcp">GCP</span>
                         Google Cloud Platform
                       </span>
-                      {cloudStatuses.gcp?.status === 'CONNECTED' ? (
-                        <span className="badge badge-low">CONNECTED</span>
-                      ) : (
-                        <span className="badge badge-neutral">{cloudStatuses.gcp?.status || 'NOT CONFIGURED'}</span>
-                      )}
+                      <div style={{ display: 'flex', gap: '4px' }}>
+                        {cloudStatuses.gcp?.status === 'CONNECTED' ? (
+                          <span className="badge badge-low">CONNECTED</span>
+                        ) : cloudStatuses.gcp?.status === 'INSUFFICIENT_PERMISSIONS' ? (
+                          <span className="badge badge-crit">INSUFFICIENT PERMS</span>
+                        ) : (
+                          <span className="badge badge-neutral">{cloudStatuses.gcp?.status || 'NOT CONFIGURED'}</span>
+                        )}
+                        <span className={`badge ${cloudStatuses.gcp?.source_mode === 'REAL' ? 'badge-real' : 'badge-demo'}`}>
+                          {cloudStatuses.gcp?.source_mode === 'REAL' ? 'REAL DATA' : 'DEMO MODE'}
+                        </span>
+                      </div>
                     </div>
                     
                     <div className="cloud-meta-list">
                       <div className="cloud-meta-item">
                         <span>Project ID:</span>
-                        <span>{cloudStatuses.gcp?.project_id || 'Configured'}</span>
+                        <span>cloud-security-student-gcp</span>
                       </div>
                       <div className="cloud-meta-item">
-                        <span>Credentials:</span>
-                        <span>Service Account JSON</span>
+                        <span>Authentication:</span>
+                        <span>Service Account JSON Token</span>
                       </div>
                       <div className="cloud-meta-item">
                         <span>Telemetry Source:</span>
-                        <span>Google Cloud Audit</span>
+                        <span>Google Cloud Logging v2</span>
                       </div>
                       <div className="cloud-meta-item">
-                        <span>IAM Role:</span>
-                        <span>roles/logging.viewer</span>
+                        <span>Last Sync Status:</span>
+                        <span style={{ color: cloudStatuses.gcp?.error ? 'var(--status-crit)' : 'var(--text-main)', maxWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {cloudStatuses.gcp?.last_collection_message || (cloudStatuses.gcp?.error ? 'PermissionDenied' : 'Ready')}
+                        </span>
+                      </div>
+                      <div className="cloud-meta-item">
+                        <span>Events Ingested:</span>
+                        <span style={{ fontFamily: 'var(--font-mono)', fontWeight: '600' }}>
+                          {cloudStatuses.gcp?.events_processed || 0}
+                        </span>
                       </div>
                     </div>
                   </div>
 
                   <div className="cloud-actions">
                     <button onClick={() => handleTestConnection('gcp')} className="btn btn-subtle btn-sm" style={{ flex: 1 }}>
-                      Test Connection
+                      Test Auth
                     </button>
                     <button 
                       onClick={() => handleSyncLogs('gcp')} 
-                      disabled={activeUser.is_pro !== 1 && activeUser.role !== 'ADMIN'}
+                      disabled={isSyncing.gcp || (activeUser.is_pro !== 1 && activeUser.role !== 'ADMIN')}
                       className={`btn btn-primary btn-sm ${activeUser.is_pro !== 1 && activeUser.role !== 'ADMIN' ? 'btn-disabled' : ''}`}
                       style={{ flex: 1 }}
                     >
-                      Sync Audit Logs
+                      <RefreshCw className={`w-3 h-3 ${isSyncing.gcp ? 'animate-spin' : ''}`} />
+                      {isSyncing.gcp ? 'Syncing...' : 'Sync Audit Logs'}
                     </button>
                   </div>
                 </div>
@@ -1345,7 +1452,9 @@ export default function App() {
                         <span className="badge badge-oci">OCI</span>
                         Oracle Cloud Infrastructure
                       </span>
-                      <span className="badge badge-info">DEMO MODE</span>
+                      <div style={{ display: 'flex', gap: '4px' }}>
+                        <span className="badge badge-info">DEMO MODE</span>
+                      </div>
                     </div>
                     
                     <div className="cloud-meta-list">
@@ -1362,23 +1471,32 @@ export default function App() {
                         <span>Deterministic Ingest Active</span>
                       </div>
                       <div className="cloud-meta-item">
-                        <span>Signing Key:</span>
-                        <span>Mock PEM Stream</span>
+                        <span>Last Sync Status:</span>
+                        <span style={{ color: 'var(--text-main)', maxWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {cloudStatuses.oci?.last_collection_message || 'Demo Stream Ready'}
+                        </span>
+                      </div>
+                      <div className="cloud-meta-item">
+                        <span>Events Ingested:</span>
+                        <span style={{ fontFamily: 'var(--font-mono)', fontWeight: '600' }}>
+                          {cloudStatuses.oci?.events_processed || 0}
+                        </span>
                       </div>
                     </div>
                   </div>
 
                   <div className="cloud-actions">
                     <button onClick={() => handleTestConnection('oci')} className="btn btn-subtle btn-sm" style={{ flex: 1 }}>
-                      Test Connection
+                      Test Adapter
                     </button>
                     <button 
                       onClick={() => handleSyncLogs('oci')} 
-                      disabled={activeUser.is_pro !== 1 && activeUser.role !== 'ADMIN'}
+                      disabled={isSyncing.oci || (activeUser.is_pro !== 1 && activeUser.role !== 'ADMIN')}
                       className={`btn btn-primary btn-sm ${activeUser.is_pro !== 1 && activeUser.role !== 'ADMIN' ? 'btn-disabled' : ''}`}
                       style={{ flex: 1 }}
                     >
-                      Sync Guard Logs
+                      <RefreshCw className={`w-3 h-3 ${isSyncing.oci ? 'animate-spin' : ''}`} />
+                      {isSyncing.oci ? 'Syncing...' : 'Sync Guard Logs'}
                     </button>
                   </div>
                 </div>

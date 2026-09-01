@@ -33,7 +33,7 @@ def get_all_adapters() -> Dict[str, BaseCloudAdapter]:
 
 def get_multi_cloud_status(refresh: bool = False) -> Dict[str, Any]:
     """
-    Returns connection status and metrics for all cloud providers.
+    Returns connection status, telemetry collection metrics, and operating mode for all cloud providers.
     Never exposes raw secrets or keys.
     """
     adapters = get_all_adapters()
@@ -45,11 +45,16 @@ def get_multi_cloud_status(refresh: bool = False) -> Dict[str, Any]:
                 "provider": name,
                 "status": val_res.get("status"),
                 "last_check": val_res.get("last_checked"),
+                "last_attempted_collection": adapter.last_attempted_collection,
+                "last_successful_collection": adapter.last_successful_collection,
+                "last_collection_message": adapter.last_collection_message,
                 "details": val_res.get("details"),
                 "error": adapter.last_error,
                 "events_processed": adapter.events_collected_count,
+                "new_events_last_sync": adapter.new_events_last_sync,
                 "threats_detected": adapter.threats_flagged_count,
-                "latest_risk_level": adapter.last_risk_level
+                "latest_risk_level": adapter.last_risk_level,
+                "source_mode": adapter.source_mode
             }
         else:
             results[name] = adapter.get_connection_status()

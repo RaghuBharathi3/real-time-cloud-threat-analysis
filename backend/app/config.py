@@ -57,6 +57,9 @@ _RAW_SETTINGS = {
     "OCI_FINGERPRINT": os.getenv("OCI_FINGERPRINT"),
     "OCI_PRIVATE_KEY_PATH": os.getenv("OCI_PRIVATE_KEY_PATH"),
     "OCI_REGION": os.getenv("OCI_REGION"),
+    
+    # Telemetry Polling & Collection Window
+    "COLLECTION_LOOKBACK_MINUTES": int(os.getenv("COLLECTION_LOOKBACK_MINUTES", "60")),
 }
 
 def get_cloud_credentials_summary() -> dict:

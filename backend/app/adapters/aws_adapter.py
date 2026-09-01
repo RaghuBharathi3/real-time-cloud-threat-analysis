@@ -119,23 +119,70 @@ class AWSAdapter(BaseCloudAdapter):
                 "last_checked": self.last_check_time
             }
 
-    def collect_events(self, limit: int = 10) -> List[Dict[str, Any]]:
+    def collect_events(self, limit: int = 10, lookback_minutes: int = 60) -> List[Dict[str, Any]]:
         """
-        Queries AWS CloudTrail for recent security/audit events or generates realistic live AWS events.
+        Queries AWS CloudTrail for management events within the lookback window.
+        Gracefully handles permission boundaries and idle accounts without faking live data.
         """
+        self.last_attempted_collection = datetime.now(timezone.utc).isoformat()
         events = []
+
         if self.connect() and self._cloudtrail_client:
             try:
-                response = self._cloudtrail_client.lookup_events(MaxResults=limit)
+                from datetime import timedelta
+                start_time = datetime.now(timezone.utc) - timedelta(minutes=lookback_minutes)
+                response = self._cloudtrail_client.lookup_events(
+                    StartTime=start_time,
+                    MaxResults=limit
+                )
                 raw_trail_events = response.get("Events", [])
                 for ev in raw_trail_events:
-                    events.append(self.normalize_event(ev))
-            except Exception as e:
-                # If CloudTrail read permissions are restricted, fallback to deterministic live provider events
-                self.last_error = f"CloudTrail lookup: {str(e)}"
+                    norm = self.normalize_event(ev)
+                    norm["source_mode"] = "REAL"
+                    events.append(norm)
 
-        if not events:
+                self.last_status = "CONNECTED"
+                self.last_error = None
+                self.last_successful_collection = self.last_attempted_collection
+                self.source_mode = "REAL"
+                self.new_events_last_sync = len(events)
+                if len(events) == 0:
+                    self.last_collection_message = f"CloudTrail active: 0 events found in last {lookback_minutes}m (Account idle)."
+                else:
+                    self.last_collection_message = f"Successfully collected {len(events)} CloudTrail events."
+            except ClientError as e:
+                code = e.response.get("Error", {}).get("Code", "ClientError")
+                if code in ["AccessDenied", "AccessDeniedException", "UnauthorizedOperation"]:
+                    self.last_status = "INSUFFICIENT_PERMISSIONS"
+                    self.last_error = "AccessDenied: IAM user lacks cloudtrail:LookupEvents policy permission."
+                    self.last_collection_message = "Collection failed: Insufficient IAM permissions (attach SecurityAudit policy)."
+                else:
+                    self.last_status = "FAILED"
+                    self.last_error = f"AWS CloudTrail lookup error: {code}"
+                    self.last_collection_message = f"Collection failed: {self.last_error}"
+
+                # Fallback to demo events ONLY if in Demo Mode
+                if settings.is_demo_mode:
+                    events = self._generate_live_sample_events(limit)
+                    for ev in events:
+                        ev["source_mode"] = "DEMO"
+                    self.source_mode = "DEMO"
+            except Exception as e:
+                self.last_status = "FAILED"
+                self.last_error = str(e)
+                self.last_collection_message = f"Collection error: {str(e)}"
+                if settings.is_demo_mode:
+                    events = self._generate_live_sample_events(limit)
+                    for ev in events:
+                        ev["source_mode"] = "DEMO"
+                    self.source_mode = "DEMO"
+        else:
+            # Running in pure Demo Mode without AWS credentials
             events = self._generate_live_sample_events(limit)
+            for ev in events:
+                ev["source_mode"] = "DEMO"
+            self.source_mode = "DEMO"
+            self.last_collection_message = f"Generated {len(events)} synthetic events (Demo Mode)."
 
         self.events_collected_count += len(events)
         return events
@@ -145,7 +192,7 @@ class AWSAdapter(BaseCloudAdapter):
         Normalizes AWS CloudTrail event to Canonical Event Schema.
         """
         # Check if already canonical
-        if "cloud_provider" in raw_event and "event_type" in raw_event:
+        if "cloud_provider" in raw_event and "event_type" in raw_event and "ip_address" in raw_event:
             return raw_event
 
         event_id = raw_event.get("EventId") or raw_event.get("eventID") or f"AWS-{uuid.uuid4().hex[:8].upper()}"
@@ -192,10 +239,11 @@ class AWSAdapter(BaseCloudAdapter):
             "user_id": str(user_name),
             "event_type": event_type,
             "ip_address": ip_addr if self._is_valid_ipv4(ip_addr) else "192.168.1.100",
-            "location": "US",
+            "location": "IN",
             "failed_attempts": 0,
             "resource": resource_name,
-            "request_frequency": 1
+            "request_frequency": 1,
+            "source_mode": raw_event.get("source_mode", "REAL")
         }
 
     def _is_valid_ipv4(self, ip: str) -> bool:

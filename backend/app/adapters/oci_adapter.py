@@ -62,19 +62,27 @@ class OCIAdapter(BaseCloudAdapter):
             "last_checked": self.last_check_time
         }
 
-    def collect_events(self, limit: int = 10) -> List[Dict[str, Any]]:
+    def collect_events(self, limit: int = 10, lookback_minutes: int = 60) -> List[Dict[str, Any]]:
         """
-        Collects or generates OCI Audit & Cloud Guard security events.
+        Generates deterministic OCI Audit & Cloud Guard security events.
+        Operates strictly in DEMO MODE.
         """
+        self.last_attempted_collection = datetime.now(timezone.utc).isoformat()
         events = self._generate_live_sample_events(limit)
+        for ev in events:
+            ev["source_mode"] = "DEMO"
         self.events_collected_count += len(events)
+        self.last_successful_collection = self.last_attempted_collection
+        self.last_collection_message = f"Generated {len(events)} synthetic Oracle Cloud Guard events (Demo Mode)."
+        self.source_mode = "DEMO"
+        self.new_events_last_sync = len(events)
         return events
 
     def normalize_event(self, raw_event: Dict[str, Any]) -> Dict[str, Any]:
         """
         Normalizes OCI Audit Log payload into Canonical Event Schema.
         """
-        if "cloud_provider" in raw_event and "event_type" in raw_event:
+        if "cloud_provider" in raw_event and "event_type" in raw_event and "ip_address" in raw_event:
             return raw_event
 
         event_id = raw_event.get("eventID") or raw_event.get("id") or f"OCI-{uuid.uuid4().hex[:8].upper()}"
@@ -106,7 +114,8 @@ class OCIAdapter(BaseCloudAdapter):
             "location": "US",
             "failed_attempts": int(raw_event.get("failed_attempts", 0)),
             "resource": resource,
-            "request_frequency": int(raw_event.get("request_frequency", 1))
+            "request_frequency": int(raw_event.get("request_frequency", 1)),
+            "source_mode": "DEMO"
         }
 
     def _is_valid_ipv4(self, ip: str) -> bool:

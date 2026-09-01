@@ -13,6 +13,7 @@ from .modules.module1_event_collection import validate_security_event, SecurityE
 from .modules.module2_preprocessing import preprocess_event
 from .modules.module3_threat_detection import predict_threat, train_threat_model, get_loaded_metrics
 from .adapters import get_adapter, get_all_adapters, get_multi_cloud_status
+from .core.rate_limiter import check_rate_limit
 
 # Initialize SQLite tables and default users
 init_db()
@@ -82,7 +83,7 @@ def get_cloud_status(refresh: bool = Query(False), user: UserProfile = Depends(g
         "timestamp": datetime.now(timezone.utc).isoformat()
     }
 
-@app.post("/api/v1/cloud/test-connection/{provider}")
+@app.post("/api/v1/cloud/test-connection/{provider}", dependencies=[Depends(check_rate_limit("cloud_test"))])
 def test_cloud_connection(
     provider: str,
     user: UserProfile = Depends(get_current_user)
@@ -99,10 +100,11 @@ def test_cloud_connection(
     )
     return res
 
-@app.post("/api/v1/cloud/sync/{provider}")
+@app.post("/api/v1/cloud/sync/{provider}", dependencies=[Depends(check_rate_limit("cloud_sync"))])
 def sync_cloud_logs(
     provider: str,
-    limit: int = Query(5, ge=1, le=50),
+    limit: int = Query(10, ge=1, le=50),
+    lookback_minutes: Optional[int] = Query(None, ge=1, le=1440),
     user: UserProfile = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -116,8 +118,12 @@ def sync_cloud_logs(
     if not adapter:
         raise HTTPException(status_code=404, detail=f"Unsupported cloud provider: '{provider}'")
 
-    raw_events = adapter.collect_events(limit=limit)
+    effective_lookback = lookback_minutes or int(settings.get("COLLECTION_LOOKBACK_MINUTES", 60))
+    raw_events = adapter.collect_events(limit=limit, lookback_minutes=effective_lookback)
+    
     processed = []
+    new_inserted = 0
+    skipped_duplicates = 0
 
     for raw in raw_events:
         try:
@@ -126,7 +132,7 @@ def sync_cloud_logs(
             features = preprocess_event(validated.model_dump())
             threat_res = predict_threat(features, resource_name=validated.resource)
 
-            # Persist alert
+            # Deduplication & Idempotency Check
             existing = db.query(SecurityAlert).filter(SecurityAlert.event_id == validated.event_id).first()
             if not existing:
                 db_alert = SecurityAlert(
@@ -146,10 +152,14 @@ def sync_cloud_logs(
                     risk_score=threat_res["risk_score"],
                     severity=threat_res["severity"],
                     reasons=json.dumps(threat_res["reason"]),
-                    compliance_recommendations=json.dumps(threat_res.get("compliance", {}))
+                    compliance_recommendations=json.dumps(threat_res.get("compliance", {})),
+                    source_mode=canonical.get("source_mode", adapter.source_mode)
                 )
                 db.add(db_alert)
                 db.commit()
+                new_inserted += 1
+            else:
+                skipped_duplicates += 1
 
             processed.append({
                 "event_id": validated.event_id,
@@ -158,7 +168,8 @@ def sync_cloud_logs(
                 "threat_type": threat_res["threat_type"],
                 "risk_score": threat_res["risk_score"],
                 "severity": threat_res["severity"],
-                "compliance": threat_res.get("compliance", {})
+                "compliance": threat_res.get("compliance", {}),
+                "source_mode": canonical.get("source_mode", adapter.source_mode)
             })
         except Exception as e:
             continue
@@ -166,18 +177,24 @@ def sync_cloud_logs(
     log_audit_event(
         actor=user.username,
         action="CLOUD_SYNC",
-        details=f"Synchronized {len(processed)} events from {provider.upper()} adapter."
+        details=f"Synchronized {len(processed)} events from {provider.upper()} ({new_inserted} new, {skipped_duplicates} duplicates skipped)."
     )
 
     return {
         "provider": provider,
+        "status": adapter.last_status,
+        "source_mode": adapter.source_mode,
         "synced_count": len(processed),
+        "new_inserted_count": new_inserted,
+        "skipped_duplicates_count": skipped_duplicates,
+        "lookback_minutes": effective_lookback,
+        "message": adapter.last_collection_message or f"Processed {len(processed)} events ({new_inserted} new).",
         "events": processed
     }
 
 # --- Core Pipeline Execution ---
 
-@app.post("/api/v1/pipeline/run")
+@app.post("/api/v1/pipeline/run", dependencies=[Depends(check_rate_limit("pipeline"))])
 def run_pipeline(
     raw_event: Dict[str, Any], 
     user: UserProfile = Depends(get_current_user),
@@ -217,7 +234,8 @@ def run_pipeline(
         risk_score=threat_result["risk_score"],
         severity=threat_result["severity"],
         reasons=json.dumps(threat_result["reason"]),
-        compliance_recommendations=json.dumps(threat_result.get("compliance", {}))
+        compliance_recommendations=json.dumps(threat_result.get("compliance", {})),
+        source_mode=raw_event.get("source_mode", "REAL")
     )
     
     existing = db.query(SecurityAlert).filter(SecurityAlert.event_id == validated_event.event_id).first()
@@ -232,7 +250,8 @@ def run_pipeline(
         "detection_result": threat_result,
         "risk_score": threat_result["risk_score"],
         "severity": threat_result["severity"],
-        "compliance": threat_result.get("compliance", {})
+        "compliance": threat_result.get("compliance", {}),
+        "source_mode": raw_event.get("source_mode", "REAL")
     }
 
 # --- Deterministic Demo Scenarios ---
@@ -300,7 +319,7 @@ DEMO_SCENARIOS = {
     }
 }
 
-@app.post("/api/v1/pipeline/demo-scenario/{scenario_name}")
+@app.post("/api/v1/pipeline/demo-scenario/{scenario_name}", dependencies=[Depends(check_rate_limit("pipeline"))])
 def trigger_demo_scenario(
     scenario_name: str,
     user: UserProfile = Depends(get_current_user),
@@ -318,6 +337,7 @@ def trigger_demo_scenario(
     now_str = datetime.now(timezone.utc).isoformat()[:19]
     unique_event["event_id"] = f"{scen['event_id']}-{datetime.now(timezone.utc).strftime('%H%M%S')}"
     unique_event["timestamp"] = now_str
+    unique_event["source_mode"] = "DEMO"
 
     if unique_event["cloud_provider"] != "aws" and user.is_pro != 1 and user.role != "ADMIN":
         raise HTTPException(
@@ -347,7 +367,8 @@ def trigger_demo_scenario(
         risk_score=threat_res["risk_score"],
         severity=threat_res["severity"],
         reasons=json.dumps(threat_res["reason"]),
-        compliance_recommendations=json.dumps(threat_res.get("compliance", {}))
+        compliance_recommendations=json.dumps(threat_res.get("compliance", {})),
+        source_mode="DEMO"
     )
     db.add(db_alert)
     db.commit()
@@ -359,10 +380,11 @@ def trigger_demo_scenario(
         "detection_result": threat_res,
         "risk_score": threat_res["risk_score"],
         "severity": threat_res["severity"],
-        "compliance": threat_res.get("compliance", {})
+        "compliance": threat_res.get("compliance", {}),
+        "source_mode": "DEMO"
     }
 
-@app.post("/api/v1/pipeline/simulate-next")
+@app.post("/api/v1/pipeline/simulate-next", dependencies=[Depends(check_rate_limit("pipeline"))])
 def simulate_next_event(
     user: UserProfile = Depends(require_admin), 
     db: Session = Depends(get_db)
@@ -404,7 +426,8 @@ def simulate_next_event(
         risk_score=threat_res["risk_score"],
         severity=threat_res["severity"],
         reasons=json.dumps(threat_res["reason"]),
-        compliance_recommendations=json.dumps(threat_res.get("compliance", {}))
+        compliance_recommendations=json.dumps(threat_res.get("compliance", {})),
+        source_mode="DEMO"
     )
     
     db.add(db_alert)
@@ -417,7 +440,8 @@ def simulate_next_event(
         "detection_result": threat_res,
         "risk_score": threat_res["risk_score"],
         "severity": threat_res["severity"],
-        "compliance": threat_res.get("compliance", {})
+        "compliance": threat_res.get("compliance", {}),
+        "source_mode": "DEMO"
     }
 
 # --- Alerts Feed ---
@@ -454,7 +478,8 @@ def get_alerts(limit: int = 50, db: Session = Depends(get_db)):
             "risk_score": r.risk_score if r.risk_score is not None else 10,
             "severity": r.severity or "LOW",
             "reasons": reasons_list,
-            "compliance": comp_data
+            "compliance": comp_data,
+            "source_mode": getattr(r, "source_mode", "DEMO") or "DEMO"
         })
     return results
 
@@ -464,7 +489,7 @@ def get_alerts(limit: int = 50, db: Session = Depends(get_db)):
 def get_model_metrics(user: UserProfile = Depends(get_current_user)):
     return get_loaded_metrics()
 
-@app.post("/api/v1/model/train")
+@app.post("/api/v1/model/train", dependencies=[Depends(check_rate_limit("ml_train"))])
 def retrain_model(user: UserProfile = Depends(require_admin)):
     root_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
     train_csv = os.path.join(root_dir, "data", "raw", "security_events.csv")
@@ -497,7 +522,7 @@ def get_session(user: UserProfile = Depends(get_current_user)):
 
 # --- Admin Audit Trail ---
 
-@app.get("/api/v1/admin/audit-logs")
+@app.get("/api/v1/admin/audit-logs", dependencies=[Depends(check_rate_limit("admin"))])
 def get_audit_logs(
     limit: int = 50,
     user: UserProfile = Depends(require_admin),
@@ -516,7 +541,7 @@ class WebhookPayload(BaseModel):
     order_id: str
     user_id: str
 
-@app.post("/api/v1/billing/checkout")
+@app.post("/api/v1/billing/checkout", dependencies=[Depends(check_rate_limit("auth"))])
 def create_checkout_order(
     req: CheckoutRequest,
     user: UserProfile = Depends(get_current_user),

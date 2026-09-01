@@ -12,10 +12,15 @@ class BaseCloudAdapter(ABC):
         self.provider_name = provider_name.lower()
         self.last_status: str = "NOT CONFIGURED"
         self.last_check_time: Optional[str] = None
+        self.last_attempted_collection: Optional[str] = None
+        self.last_successful_collection: Optional[str] = None
+        self.last_collection_message: Optional[str] = None
         self.last_error: Optional[str] = None
         self.events_collected_count: int = 0
+        self.new_events_last_sync: int = 0
         self.threats_flagged_count: int = 0
         self.last_risk_level: str = "LOW"
+        self.source_mode: str = "DEMO"
 
     @abstractmethod
     def is_configured(self) -> bool:
@@ -31,23 +36,13 @@ class BaseCloudAdapter(ABC):
     def validate_credentials(self) -> Dict[str, Any]:
         """
         Validates cloud credentials against live provider APIs.
-        Returns a structured dictionary without leaking secret values:
-        {
-            "provider": "aws" | "azure" | "gcp",
-            "status": "CONNECTED" | "CONFIGURED" | "MISSING" | "INVALID" | "INSUFFICIENT_PERMISSIONS",
-            "account_id": Optional[str],
-            "region": Optional[str],
-            "details": Optional[str],
-            "last_checked": ISO timestamp
-        }
         """
         pass
 
     @abstractmethod
-    def collect_events(self, limit: int = 10) -> List[Dict[str, Any]]:
+    def collect_events(self, limit: int = 10, lookback_minutes: int = 60) -> List[Dict[str, Any]]:
         """
         Collects security/audit events from the cloud provider.
-        Returns a list of raw provider events or fallback synthetic logs.
         """
         pass
 
@@ -66,8 +61,13 @@ class BaseCloudAdapter(ABC):
             "provider": self.provider_name,
             "status": self.last_status,
             "last_check": self.last_check_time,
+            "last_attempted_collection": self.last_attempted_collection,
+            "last_successful_collection": self.last_successful_collection,
+            "last_collection_message": self.last_collection_message,
             "error": self.last_error,
             "events_processed": self.events_collected_count,
+            "new_events_last_sync": self.new_events_last_sync,
             "threats_detected": self.threats_flagged_count,
-            "latest_risk_level": self.last_risk_level
+            "latest_risk_level": self.last_risk_level,
+            "source_mode": self.source_mode
         }
