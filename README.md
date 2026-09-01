@@ -79,6 +79,7 @@ The complete documentation suite is organized in the `docs/` directory:
 - [25. Troubleshooting](file:///c:/Users/Windows/Documents/cloud/docs/25_TROUBLESHOOTING.md): Common error resolutions for ports, dependencies, and credentials.
 - [26. Implementation Status](file:///c:/Users/Windows/Documents/cloud/docs/26_IMPLEMENTATION_STATUS.md): Single source of truth implementation matrix.
 - [27. Presentation Guide](file:///c:/Users/Windows/Documents/cloud/docs/27_PRESENTATION_GUIDE.md): Structured 5 to 8 minute demonstration script for academic evaluation.
+- [Academic Evaluation and Defense Package](file:///c:/Users/Windows/Documents/cloud/docs/ACADEMIC_EVALUATION_AND_DEFENSE_PACKAGE.md): Complete academic viva package containing architecture, ML justification, risk formulations, 20+ viva questions, and defense strategies.
 
 ---
 
