@@ -55,6 +55,7 @@ The complete documentation suite is organized in the `docs/` directory:
 - [10. OCI Setup](file:///c:/Users/Windows/Documents/cloud/docs/10_OCI_SETUP.md): Oracle Cloud Guard integration and verified Demo Mode stream.
 - [Cloud Provider Setup and Usage Audit](file:///c:/Users/Windows/Documents/cloud/docs/CLOUD_PROVIDER_SETUP_AND_USAGE_AUDIT.md): Comprehensive cloud provider audit, environment variables analysis, step-by-step setup, and demonstration workflow.
 - [Cloud Event Collection Audit](file:///c:/Users/Windows/Documents/cloud/docs/CLOUD_EVENT_COLLECTION_AUDIT.md): Source-code audit of event collection, live execution results, and telemetry generation instructions.
+- [Real Telemetry and Cloud Integration Guide](file:///c:/Users/Windows/Documents/cloud/docs/REAL_TELEMETRY_AND_CLOUD_INTEGRATION.md): Architecture specifications for real cloud event ingestion, sliding-window rate limiting, deduplication, and source mode tagging.
 
 ### Security, Authentication, and Tiers
 - [11. Credential Security](file:///c:/Users/Windows/Documents/cloud/docs/11_CREDENTIAL_SECURITY.md): Secrets isolation, ignore rules, and zero-leakage policies.
@@ -89,4 +90,4 @@ Run the automated test suite with pytest:
 pytest tests/
 ```
 
-Test Results: 27 passed, 0 failed across cloud adapters, pipeline stages, and REST endpoints.
+Test Results: 28 passed, 0 failed across cloud adapters, pipeline stages, rate limiting, and REST endpoints.
