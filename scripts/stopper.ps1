@@ -49,10 +49,8 @@ function Release-Port([int]$Port, [string]$ServiceName) {
             $pidToKill = $conn.OwningProcess
             if ($pidToKill -gt 0) {
                 try {
-                    $proc = Get-Process -Id $pidToKill -ErrorAction SilentlyContinue
-                    if ($proc -and ($proc.ProcessName -match "python|node|uvicorn|cmd|powershell")) {
-                        Stop-Process -Id $pidToKill -Force -ErrorAction SilentlyContinue
-                    }
+                    Stop-Process -Id $pidToKill -Force -ErrorAction SilentlyContinue
+                    & cmd.exe /c "taskkill /F /PID $pidToKill /T >nul 2>&1"
                 } catch {}
             }
         }
