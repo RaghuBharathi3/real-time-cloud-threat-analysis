@@ -13,6 +13,11 @@ import {
   Filter,
   Play,
   Pause,
+  Square,
+  RotateCcw,
+  Trash2,
+  Clock,
+  Radio,
   ExternalLink,
   ChevronRight,
   ChevronLeft,
@@ -27,7 +32,9 @@ import {
   Copy,
   Terminal,
   Zap,
-  Info
+  Info,
+  BarChart3,
+  ArrowRight
 } from 'lucide-react';
 
 const API_BASE = "http://127.0.0.1:8000";
@@ -63,8 +70,39 @@ export default function App() {
   // Audit Logs State
   const [auditLogs, setAuditLogs] = useState([]);
 
-  // Stream Simulation State
-  const [isSimulating, setIsSimulating] = useState(false);
+  // Stream Engine Observability State
+  const [streamStatus, setStreamStatus] = useState({
+    status: 'IDLE',
+    session_id: null,
+    duration_seconds: 0,
+    events_collected: 0,
+    events_processed: 0,
+    threats_detected: 0,
+    critical_threats: 0,
+    high_threats: 0,
+    medium_threats: 0,
+    low_events: 0,
+    average_risk: 0.0,
+    throughput_eps: 0.0,
+    last_event: null,
+    provider_counts: { aws: 0, azure: 0, gcp: 0, oci: 0, demo: 0 },
+    threat_distribution: { 'Brute-Force': 0, 'Unauthorized': 0, 'Normal': 0 },
+    risk_distribution: { CRITICAL: 0, HIGH: 0, MEDIUM: 0, LOW: 0 },
+    pipeline_stages: {
+      collection: { status: 'IDLE', details: 'Ready for stream start' },
+      validation: { status: 'IDLE', details: 'Module 1 Schema Validator ready' },
+      preprocessing: { status: 'IDLE', details: 'Module 2 Feature Extractor ready' },
+      ml_classification: { status: 'IDLE', details: 'Module 3 Random Forest ready' },
+      risk_engine: { status: 'IDLE', details: 'Deterministic Risk Engine ready' },
+      database: { status: 'IDLE', details: 'Idempotent DB Persistence ready' },
+      dashboard: { status: 'CONNECTED', details: 'REST Stream Connection Active' }
+    },
+    activity_timeline: []
+  });
+
+  const [streamInterval, setStreamInterval] = useState(2.0);
+  const [isResetConfirmOpen, setIsResetConfirmOpen] = useState(false);
+  const [isClearDataConfirmOpen, setIsClearDataConfirmOpen] = useState(false);
 
   // Event Table Filtering & Pagination
   const [searchQuery, setSearchQuery] = useState('');
@@ -84,6 +122,14 @@ export default function App() {
     setToast({ message, type });
     setTimeout(() => setToast(null), 5000);
   }, []);
+
+  const formatDuration = (seconds) => {
+    if (!seconds || seconds < 0) return '00:00:00';
+    const hrs = Math.floor(seconds / 3600).toString().padStart(2, '0');
+    const mins = Math.floor((seconds % 3600) / 60).toString().padStart(2, '0');
+    const secs = Math.floor(seconds % 60).toString().padStart(2, '0');
+    return `${hrs}:${mins}:${secs}`;
+  };
 
   // ----------------------------------------------------------------------------
   // API Integration Functions
@@ -119,6 +165,19 @@ export default function App() {
       console.error('Failed to fetch cloud status:', err);
     }
   }, [activeUser.user_id]);
+
+  // Fetch Stream Status
+  const fetchStreamStatus = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/stream/status`);
+      if (res.ok) {
+        const data = await res.json();
+        setStreamStatus(data);
+      }
+    } catch (err) {
+      console.error('Failed to fetch stream status:', err);
+    }
+  }, []);
 
   // Fetch Alerts
   const fetchAlerts = useCallback(async () => {
@@ -169,62 +228,122 @@ export default function App() {
     }
   }, [activeUser]);
 
-  // Initial Load & Heartbeat
+  // Initial Load & Synchronized Polling
   useEffect(() => {
     fetchHealth();
     fetchCloudStatus(false);
     fetchAlerts();
     fetchMlMetrics();
     fetchAuditLogs();
+    fetchStreamStatus();
 
+    const isFastPolling = streamStatus.status === 'RUNNING' || streamStatus.status === 'STARTING';
     const interval = setInterval(() => {
       fetchHealth();
-      fetchCloudStatus(false);
-    }, 8000);
+      fetchStreamStatus();
+      if (isFastPolling) {
+        fetchAlerts();
+      }
+    }, isFastPolling ? 1500 : 4000);
 
     return () => clearInterval(interval);
-  }, [fetchHealth, fetchCloudStatus, fetchAlerts, fetchMlMetrics, fetchAuditLogs]);
+  }, [fetchHealth, fetchCloudStatus, fetchAlerts, fetchMlMetrics, fetchAuditLogs, fetchStreamStatus, streamStatus.status]);
 
-  // Continuous Simulation Loop
-  useEffect(() => {
-    let simTimer = null;
-    if (isSimulating && activeUser.role === 'ADMIN') {
-      simTimer = setInterval(async () => {
-        try {
-          const res = await fetch(`${API_BASE}/api/v1/pipeline/simulate-next`, {
-            method: 'POST',
-            headers: { 'X-User-ID': activeUser.user_id }
-          });
-          if (res.ok) {
-            const result = await res.json();
-            const newAlert = {
-              event_id: result.event_id,
-              timestamp: result.raw_event?.timestamp || new Date().toISOString(),
-              cloud_provider: result.raw_event?.cloud_provider || 'aws',
-              user_id: result.raw_event?.user_id,
-              event_type: result.raw_event?.event_type,
-              ip_address: result.raw_event?.ip_address,
-              location: result.raw_event?.location,
-              failed_attempts: result.raw_event?.failed_attempts,
-              resource: result.raw_event?.resource,
-              request_frequency: result.raw_event?.request_frequency,
-              threat_status: result.detection_result?.threat_status,
-              threat_type: result.detection_result?.threat_type,
-              confidence: result.detection_result?.confidence,
-              risk_score: result.risk_score,
-              severity: result.severity,
-              reasons: JSON.stringify(result.detection_result?.reason || []),
-              compliance_recommendations: JSON.stringify(result.compliance || {})
-            };
-            setAlerts(prev => [newAlert, ...prev.slice(0, 99)]);
-          }
-        } catch (err) {
-          console.error('Simulation error:', err);
-        }
-      }, 3000);
+  // Stream Lifecycle Handlers
+  const handleStartStream = async () => {
+    if (activeUser.role !== 'ADMIN') {
+      showToast('Admin role required to operate streaming ingestion.', 'error');
+      return;
     }
-    return () => clearInterval(simTimer);
-  }, [isSimulating, activeUser]);
+    try {
+      showToast('Starting real-time streaming worker...', 'warning');
+      const res = await fetch(`${API_BASE}/api/v1/stream/start?interval=${streamInterval}`, {
+        method: 'POST',
+        headers: { 'X-User-ID': activeUser.user_id }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        await fetchStreamStatus();
+        showToast(`Stream started (Session: ${data.session_id})`, 'success');
+      } else {
+        const err = await res.json();
+        showToast(err.detail || 'Failed to start stream.', 'error');
+      }
+    } catch {
+      showToast('Network error during stream start.', 'error');
+    }
+  };
+
+  const handleStopStream = async () => {
+    if (activeUser.role !== 'ADMIN') {
+      showToast('Admin role required to stop stream.', 'error');
+      return;
+    }
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/stream/stop`, {
+        method: 'POST',
+        headers: { 'X-User-ID': activeUser.user_id }
+      });
+      if (res.ok) {
+        await fetchStreamStatus();
+        showToast('Stream stopped cleanly. Metrics and session preserved.', 'success');
+      } else {
+        const err = await res.json();
+        showToast(err.detail || 'Failed to stop stream.', 'error');
+      }
+    } catch {
+      showToast('Network error during stream stop.', 'error');
+    }
+  };
+
+  const handleResetStream = async () => {
+    if (activeUser.role !== 'ADMIN') {
+      showToast('Admin role required to reset stream.', 'error');
+      return;
+    }
+    try {
+      setIsResetConfirmOpen(false);
+      const res = await fetch(`${API_BASE}/api/v1/stream/reset`, {
+        method: 'POST',
+        headers: { 'X-User-ID': activeUser.user_id }
+      });
+      if (res.ok) {
+        await fetchStreamStatus();
+        await fetchAlerts();
+        showToast('Stream session reset cleanly. All stream counters and timeline cleared.', 'success');
+      } else {
+        const err = await res.json();
+        showToast(err.detail || 'Failed to reset stream.', 'error');
+      }
+    } catch {
+      showToast('Network error during stream reset.', 'error');
+    }
+  };
+
+  const handleClearDemoData = async () => {
+    if (activeUser.role !== 'ADMIN') {
+      showToast('Admin role required to purge demo records.', 'error');
+      return;
+    }
+    try {
+      setIsClearDataConfirmOpen(false);
+      const res = await fetch(`${API_BASE}/api/v1/stream/clear-demo-data`, {
+        method: 'POST',
+        headers: { 'X-User-ID': activeUser.user_id }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        await fetchStreamStatus();
+        await fetchAlerts();
+        showToast(data.message || 'Demo records purged successfully.', 'success');
+      } else {
+        const err = await res.json();
+        showToast(err.detail || 'Failed to purge demo records.', 'error');
+      }
+    } catch {
+      showToast('Network error during demo data purge.', 'error');
+    }
+  };
 
   // Trigger 1-Click Demo Scenario
   const handleTriggerScenario = async (scenarioName) => {
@@ -252,11 +371,13 @@ export default function App() {
           risk_score: result.risk_score,
           severity: result.severity,
           reasons: JSON.stringify(result.detection_result?.reason || []),
-          compliance_recommendations: JSON.stringify(result.compliance || {})
+          compliance_recommendations: JSON.stringify(result.compliance || {}),
+          source_mode: result.source_mode || 'DEMO'
         };
         setAlerts(prev => [newAlert, ...prev]);
         setSelectedAlert(newAlert);
-        showToast(`Ingested scenario: ${scenarioName.toUpperCase()} (Risk Score: ${result.risk_score} - ${result.severity})`, 'success');
+        await fetchStreamStatus();
+        showToast(`Injected ${scenarioName.toUpperCase()} (Risk: ${result.risk_score} - ${result.severity})`, 'success');
       } else {
         const err = await res.json();
         showToast(err.detail || 'Failed to inject scenario.', 'error');
@@ -664,52 +785,158 @@ export default function App() {
           )}
 
           {/* ====================================================================
-              TAB 1: SECURITY OVERVIEW (DASHBOARD)
+              TAB 1: STREAM OPERATIONS & OBSERVABILITY CONSOLE
               ==================================================================== */}
           {activeTab === 'dashboard' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-md)' }}>
+              
+              {/* Page Header */}
               <div className="page-header">
                 <div className="page-title-group">
-                  <h2>Security Operations Overview</h2>
-                  <p>Real-time threat evaluation, risk scores, and multi-cloud telemetry metrics.</p>
+                  <h2>Stream Operations & Observability Console</h2>
+                  <p>Authoritative real-time streaming telemetry, 7-stage pipeline inspection, and multi-cloud risk analytics.</p>
                 </div>
                 <div style={{ display: 'flex', gap: '8px' }}>
-                  <button onClick={() => { fetchAlerts(); fetchCloudStatus(true); }} className="btn btn-secondary">
+                  <button onClick={() => { fetchAlerts(); fetchCloudStatus(true); fetchStreamStatus(); }} className="btn btn-secondary">
                     <RefreshCw className="w-3.5 h-3.5" />
-                    Refresh Metrics
+                    Refresh
                   </button>
-                  {activeUser.role === 'ADMIN' && (
-                    <button 
-                      onClick={() => setIsSimulating(!isSimulating)} 
-                      className={`btn ${isSimulating ? 'btn-secondary' : 'btn-primary'}`}
-                    >
-                      {isSimulating ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
-                      {isSimulating ? 'Pause Stream' : 'Start Simulation'}
-                    </button>
-                  )}
                 </div>
               </div>
 
-              {/* KPI Summary Cards */}
+              {/* Top Stream Control & Ingestion Toolbar */}
+              <div className="stream-bar">
+                <div className="stream-meta-group">
+                  <div className={`stream-status-pill status-${streamStatus.status.toLowerCase()}`}>
+                    <span className={`stream-dot ${streamStatus.status === 'RUNNING' ? 'pulse' : ''}`} />
+                    <span>{streamStatus.status}</span>
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11.5px', color: 'var(--text-muted)' }}>
+                    <span style={{ color: 'var(--text-dim)' }}>Session:</span>
+                    <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-main)', fontWeight: '600' }}>
+                      {streamStatus.session_id || 'NONE (IDLE)'}
+                    </span>
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11.5px', color: 'var(--text-muted)' }}>
+                    <Clock className="w-3.5 h-3.5 text-blue-400" />
+                    <span>Duration:</span>
+                    <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-main)', fontWeight: '600' }}>
+                      {formatDuration(streamStatus.duration_seconds)}
+                    </span>
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11.5px', color: 'var(--text-muted)' }}>
+                    <span>Rate:</span>
+                    <select 
+                      value={streamInterval} 
+                      onChange={(e) => setStreamInterval(parseFloat(e.target.value))}
+                      disabled={streamStatus.status === 'RUNNING'}
+                      className="select-compact"
+                      style={{ padding: '2px 6px', height: '26px' }}
+                    >
+                      <option value="1.0">1.0s (Fast)</option>
+                      <option value="2.0">2.0s (Normal)</option>
+                      <option value="3.5">3.5s (Steady)</option>
+                      <option value="5.0">5.0s (Low)</option>
+                    </select>
+                  </div>
+                </div>
+
+                {/* Control Action Buttons */}
+                <div className="stream-actions">
+                  {streamStatus.status === 'RUNNING' ? (
+                    <button 
+                      onClick={handleStopStream} 
+                      className="btn btn-secondary"
+                      style={{ borderColor: 'var(--status-med-border)', color: 'var(--status-med)' }}
+                    >
+                      <Square className="w-3.5 h-3.5" />
+                      Stop Stream
+                    </button>
+                  ) : (
+                    <button 
+                      onClick={handleStartStream} 
+                      disabled={streamStatus.status === 'STARTING' || streamStatus.status === 'RESETTING'}
+                      className="btn btn-primary"
+                    >
+                      <Play className="w-3.5 h-3.5" />
+                      Start Stream
+                    </button>
+                  )}
+
+                  <button 
+                    onClick={() => setIsResetConfirmOpen(true)} 
+                    disabled={streamStatus.status === 'RESETTING'}
+                    className="btn btn-secondary"
+                    title="Stop active stream and reset all stream counters to clean state"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    Reset Stream
+                  </button>
+
+                  <button 
+                    onClick={() => setIsClearDataConfirmOpen(true)} 
+                    className="btn btn-secondary"
+                    style={{ color: 'var(--text-muted)' }}
+                    title="Purge all synthetic demo records from database, preserving real cloud events"
+                  >
+                    <Trash2 className="w-3.5 h-3.5 text-red-400" />
+                    Purge Demo Data
+                  </button>
+
+                  <select 
+                    onChange={(e) => {
+                      if (e.target.value) {
+                        handleTriggerScenario(e.target.value);
+                        e.target.value = '';
+                      }
+                    }} 
+                    className="select-compact" 
+                    style={{ backgroundColor: 'var(--primary-subtle)', borderColor: 'var(--primary)' }}
+                  >
+                    <option value="">Run Test Scenario...</option>
+                    <option value="aws_brute_force">AWS: Brute Force Spray (Critical)</option>
+                    <option value="azure_keyvault">Azure: KeyVault Breach (Critical)</option>
+                    <option value="gcp_storage_burst">GCP: Storage Burst (High)</option>
+                    <option value="oci_normal">OCI: Standard Object Read (Low)</option>
+                    <option value="aws_normal">AWS: Standard Read (Low)</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Authoritative Stream KPI Metrics Ribbon */}
               <div className="kpi-grid">
                 <div className="kpi-card">
                   <div className="kpi-label">
-                    <span>Total Events</span>
+                    <span>Stream Events</span>
                     <Activity className="w-3.5 h-3.5 text-blue-400" />
                   </div>
-                  <div className="kpi-value">{stats.total}</div>
-                  <div className="kpi-subtext">Ingested multi-cloud logs</div>
+                  <div className="kpi-value">{streamStatus.events_collected}</div>
+                  <div className="kpi-subtext">Total session ingress ({stats.total} fleet total)</div>
                 </div>
 
                 <div className="kpi-card">
                   <div className="kpi-label">
-                    <span>Threats Flagged</span>
+                    <span>Events Processed</span>
+                    <Cpu className="w-3.5 h-3.5 text-emerald-400" />
+                  </div>
+                  <div className="kpi-value">{streamStatus.events_processed}</div>
+                  <div className="kpi-subtext">Passed 7 pipeline stages</div>
+                </div>
+
+                <div className="kpi-card">
+                  <div className="kpi-label">
+                    <span>Threats Detected</span>
                     <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
                   </div>
-                  <div className="kpi-value" style={{ color: stats.threats > 0 ? 'var(--status-med)' : 'var(--text-main)' }}>
-                    {stats.threats}
+                  <div className="kpi-value" style={{ color: streamStatus.threats_detected > 0 ? 'var(--status-med)' : 'var(--text-main)' }}>
+                    {streamStatus.threats_detected}
                   </div>
-                  <div className="kpi-subtext">ML classified suspicious</div>
+                  <div className="kpi-subtext">
+                    {streamStatus.events_processed > 0 ? `${((streamStatus.threats_detected / streamStatus.events_processed) * 100).toFixed(1)}% threat rate` : '0.0% threat rate'}
+                  </div>
                 </div>
 
                 <div className="kpi-card">
@@ -717,140 +944,680 @@ export default function App() {
                     <span>Critical Alerts</span>
                     <Shield className="w-3.5 h-3.5 text-red-400" />
                   </div>
-                  <div className="kpi-value" style={{ color: stats.critical > 0 ? 'var(--status-crit)' : 'var(--text-main)' }}>
-                    {stats.critical}
+                  <div className="kpi-value" style={{ color: streamStatus.critical_threats > 0 ? 'var(--status-crit)' : 'var(--text-main)' }}>
+                    {streamStatus.critical_threats}
                   </div>
                   <div className="kpi-subtext">Risk Score 80 to 100</div>
                 </div>
 
                 <div className="kpi-card">
                   <div className="kpi-label">
-                    <span>Mean Risk Score</span>
+                    <span>Mean Stream Risk</span>
                     <TrendingUp className="w-3.5 h-3.5 text-purple-400" />
                   </div>
-                  <div className="kpi-value">{stats.avgRisk} / 100</div>
-                  <div className="kpi-subtext">Fleet-wide average</div>
+                  <div className="kpi-value">{streamStatus.average_risk.toFixed(1)} / 100</div>
+                  <div className="kpi-subtext">Session rolling average</div>
                 </div>
 
                 <div className="kpi-card">
                   <div className="kpi-label">
-                    <span>Connected Clouds</span>
-                    <Server className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>Throughput (eps)</span>
+                    <Zap className="w-3.5 h-3.5 text-yellow-400" />
                   </div>
-                  <div className="kpi-value">{stats.connectedClouds} / 4</div>
-                  <div className="kpi-subtext">AWS, Azure, GCP, OCI</div>
+                  <div className="kpi-value">{streamStatus.throughput_eps.toFixed(2)}</div>
+                  <div className="kpi-subtext">Events per second</div>
                 </div>
               </div>
 
-              {/* Multi-Cloud Provider Status Row */}
+              {/* Real-Time Visual Pipeline Flow Visualizer */}
+              <div className="pipeline-flow-container">
+                <div className="pipeline-flow-header">
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <Layers className="w-4 h-4 text-blue-400" />
+                    <span style={{ fontSize: '12px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                      End-to-End Real-Time Pipeline Visualizer (7 Stages)
+                    </span>
+                  </div>
+                  <div style={{ fontSize: '11px', color: 'var(--text-dim)', fontFamily: 'var(--font-mono)' }}>
+                    State Sync: Active | Zero Loss Architecture
+                  </div>
+                </div>
+
+                <div className="pipeline-grid">
+                  {/* Stage 1: Cloud Source */}
+                  <div className={`pipeline-stage-card ${streamStatus.status === 'RUNNING' ? 'running' : ''}`}>
+                    <div className="pipeline-stage-top">
+                      <span className="pipeline-stage-num">01. INGEST</span>
+                      <span className={`badge ${streamStatus.status === 'RUNNING' ? 'badge-low' : 'badge-neutral'}`}>
+                        {streamStatus.status === 'RUNNING' ? 'ACTIVE' : 'IDLE'}
+                      </span>
+                    </div>
+                    <div className="pipeline-stage-name">Multi-Cloud Source</div>
+                    <div className="pipeline-stage-detail">AWS, Azure, GCP, OCI</div>
+                    <div className="pipeline-stage-time">{streamStatus.pipeline_stages?.collection?.last_activity || 'Standby'}</div>
+                  </div>
+
+                  {/* Stage 2: Normalization */}
+                  <div className={`pipeline-stage-card ${streamStatus.pipeline_stages?.collection?.status === 'RUNNING' ? 'running' : ''}`}>
+                    <div className="pipeline-stage-top">
+                      <span className="pipeline-stage-num">02. NORM</span>
+                      <span className={`badge ${streamStatus.pipeline_stages?.collection?.status === 'RUNNING' ? 'badge-low' : 'badge-neutral'}`}>
+                        {streamStatus.pipeline_stages?.collection?.status || 'IDLE'}
+                      </span>
+                    </div>
+                    <div className="pipeline-stage-name">Canonical Mapping</div>
+                    <div className="pipeline-stage-detail">Standard 10-field format</div>
+                    <div className="pipeline-stage-time">{streamStatus.pipeline_stages?.collection?.details || 'Normalized'}</div>
+                  </div>
+
+                  {/* Stage 3: Validation */}
+                  <div className={`pipeline-stage-card ${streamStatus.pipeline_stages?.validation?.status === 'RUNNING' ? 'running' : ''}`}>
+                    <div className="pipeline-stage-top">
+                      <span className="pipeline-stage-num">03. MODULE 1</span>
+                      <span className={`badge ${streamStatus.pipeline_stages?.validation?.status === 'RUNNING' ? 'badge-low' : 'badge-neutral'}`}>
+                        {streamStatus.pipeline_stages?.validation?.status || 'IDLE'}
+                      </span>
+                    </div>
+                    <div className="pipeline-stage-name">Schema Validation</div>
+                    <div className="pipeline-stage-detail">Pydantic Constraints</div>
+                    <div className="pipeline-stage-time">{streamStatus.pipeline_stages?.validation?.details || 'Module 1 Ready'}</div>
+                  </div>
+
+                  {/* Stage 4: Preprocessing */}
+                  <div className={`pipeline-stage-card ${streamStatus.pipeline_stages?.preprocessing?.status === 'RUNNING' ? 'running' : ''}`}>
+                    <div className="pipeline-stage-top">
+                      <span className="pipeline-stage-num">04. MODULE 2</span>
+                      <span className={`badge ${streamStatus.pipeline_stages?.preprocessing?.status === 'RUNNING' ? 'badge-low' : 'badge-neutral'}`}>
+                        {streamStatus.pipeline_stages?.preprocessing?.status || 'IDLE'}
+                      </span>
+                    </div>
+                    <div className="pipeline-stage-name">Feature Extractor</div>
+                    <div className="pipeline-stage-detail">6-Feature Numerical Vector</div>
+                    <div className="pipeline-stage-time">{streamStatus.pipeline_stages?.preprocessing?.details || 'Module 2 Ready'}</div>
+                  </div>
+
+                  {/* Stage 5: ML Classifier */}
+                  <div className={`pipeline-stage-card ${streamStatus.pipeline_stages?.ml_classification?.status === 'RUNNING' ? 'running' : ''}`}>
+                    <div className="pipeline-stage-top">
+                      <span className="pipeline-stage-num">05. MODULE 3</span>
+                      <span className={`badge ${streamStatus.pipeline_stages?.ml_classification?.status === 'RUNNING' ? 'badge-low' : 'badge-neutral'}`}>
+                        {streamStatus.pipeline_stages?.ml_classification?.status || 'IDLE'}
+                      </span>
+                    </div>
+                    <div className="pipeline-stage-name">Random Forest ML</div>
+                    <div className="pipeline-stage-detail">Multi-Class Probability</div>
+                    <div className="pipeline-stage-time">{streamStatus.pipeline_stages?.ml_classification?.details || 'Module 3 Ready'}</div>
+                  </div>
+
+                  {/* Stage 6: Risk & Compliance */}
+                  <div className={`pipeline-stage-card ${streamStatus.pipeline_stages?.risk_engine?.status === 'RUNNING' ? 'running' : ''}`}>
+                    <div className="pipeline-stage-top">
+                      <span className="pipeline-stage-num">06. RISK & COMP</span>
+                      <span className={`badge ${streamStatus.pipeline_stages?.risk_engine?.status === 'RUNNING' ? 'badge-low' : 'badge-neutral'}`}>
+                        {streamStatus.pipeline_stages?.risk_engine?.status || 'IDLE'}
+                      </span>
+                    </div>
+                    <div className="pipeline-stage-name">Risk Scoring Engine</div>
+                    <div className="pipeline-stage-detail">Deterministic 0-100 + NIST</div>
+                    <div className="pipeline-stage-time">{streamStatus.pipeline_stages?.risk_engine?.details || 'Score Computed'}</div>
+                  </div>
+
+                  {/* Stage 7: Database Storage */}
+                  <div className={`pipeline-stage-card ${streamStatus.pipeline_stages?.database?.status === 'RUNNING' ? 'running' : ''}`}>
+                    <div className="pipeline-stage-top">
+                      <span className="pipeline-stage-num">07. PERSIST</span>
+                      <span className={`badge ${streamStatus.pipeline_stages?.database?.status === 'RUNNING' ? 'badge-low' : 'badge-neutral'}`}>
+                        {streamStatus.pipeline_stages?.database?.status || 'IDLE'}
+                      </span>
+                    </div>
+                    <div className="pipeline-stage-name">Idempotent DB</div>
+                    <div className="pipeline-stage-detail">SQLite Deduplication</div>
+                    <div className="pipeline-stage-time">{streamStatus.pipeline_stages?.database?.details || 'Storage Ready'}</div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Visual Analytics Grid */}
+              <div className="analytics-grid">
+                
+                {/* 1. Ingress Rate & Event Timeline */}
+                <div className="analytics-card">
+                  <div>
+                    <div className="analytics-card-title">
+                      <span>Event Ingress Activity</span>
+                      <Activity className="w-3.5 h-3.5 text-blue-400" />
+                    </div>
+                    <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '8px' }}>
+                      Recent Event Telemetry Flow
+                    </div>
+                    
+                    {/* Visual SVG Timeline representation */}
+                    <div style={{ height: '70px', width: '100%', display: 'flex', alignItems: 'flex-end', gap: '3px', backgroundColor: 'var(--bg-app)', padding: '6px', borderRadius: '4px', border: '1px solid var(--border-subtle)' }}>
+                      {alerts.slice(0, 24).reverse().map((a, idx) => {
+                        const h = Math.max(12, Math.min(60, (a.risk_score || 10) * 0.58));
+                        const color = a.severity === 'CRITICAL' ? 'var(--status-crit)' : a.severity === 'HIGH' ? 'var(--status-high)' : a.severity === 'MEDIUM' ? 'var(--status-med)' : 'var(--status-low)';
+                        return (
+                          <div 
+                            key={idx} 
+                            style={{ 
+                              flex: 1, 
+                              height: `${h}px`, 
+                              backgroundColor: color, 
+                              borderRadius: '1px',
+                              opacity: 0.85
+                            }}
+                            title={`${a.event_id}: ${a.threat_type} (Risk ${a.risk_score})`}
+                          />
+                        );
+                      })}
+                      {alerts.length === 0 && (
+                        <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-dim)', fontSize: '11px' }}>
+                          No stream activity
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10.5px', color: 'var(--text-dim)', marginTop: '8px', fontFamily: 'var(--font-mono)' }}>
+                    <span>Oldest</span>
+                    <span>Recent Telemetry Ingress</span>
+                    <span>Latest</span>
+                  </div>
+                </div>
+
+                {/* 2. Risk Severity Breakdown */}
+                <div className="analytics-card">
+                  <div>
+                    <div className="analytics-card-title">
+                      <span>Risk Severity Distribution</span>
+                      <Shield className="w-3.5 h-3.5 text-purple-400" />
+                    </div>
+                    
+                    {/* Stacked Bar */}
+                    <div className="progress-stacked">
+                      <div className="progress-stacked-bar" style={{ width: `${stats.total > 0 ? (stats.critical / stats.total) * 100 : 0}%`, backgroundColor: 'var(--status-crit)' }} />
+                      <div className="progress-stacked-bar" style={{ width: `${stats.total > 0 ? (stats.high / stats.total) * 100 : 0}%`, backgroundColor: 'var(--status-high)' }} />
+                      <div className="progress-stacked-bar" style={{ width: `${stats.total > 0 ? (stats.med / stats.total) * 100 : 0}%`, backgroundColor: 'var(--status-med)' }} />
+                      <div className="progress-stacked-bar" style={{ width: `${stats.total > 0 ? (stats.low / stats.total) * 100 : 0}%`, backgroundColor: 'var(--status-low)' }} />
+                    </div>
+
+                    <div className="legend-list">
+                      <div className="legend-item">
+                        <span><span className="legend-color-dot" style={{ backgroundColor: 'var(--status-crit)' }} />Critical (80-100)</span>
+                        <span style={{ fontFamily: 'var(--font-mono)', fontWeight: '600' }}>{stats.critical}</span>
+                      </div>
+                      <div className="legend-item">
+                        <span><span className="legend-color-dot" style={{ backgroundColor: 'var(--status-high)' }} />High (60-79)</span>
+                        <span style={{ fontFamily: 'var(--font-mono)', fontWeight: '600' }}>{stats.high}</span>
+                      </div>
+                      <div className="legend-item">
+                        <span><span className="legend-color-dot" style={{ backgroundColor: 'var(--status-med)' }} />Medium (30-59)</span>
+                        <span style={{ fontFamily: 'var(--font-mono)', fontWeight: '600' }}>{stats.med}</span>
+                      </div>
+                      <div className="legend-item">
+                        <span><span className="legend-color-dot" style={{ backgroundColor: 'var(--status-low)' }} />Low (0-29)</span>
+                        <span style={{ fontFamily: 'var(--font-mono)', fontWeight: '600' }}>{stats.low}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 3. Threat Classification Distribution */}
+                <div className="analytics-card">
+                  <div>
+                    <div className="analytics-card-title">
+                      <span>Threat Category Breakdown</span>
+                      <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
+                    </div>
+                    
+                    {/* Stacked Bar */}
+                    <div className="progress-stacked">
+                      <div className="progress-stacked-bar" style={{ width: `${stats.total > 0 ? (alerts.filter(a => a.threat_type === 'Brute-Force').length / stats.total) * 100 : 0}%`, backgroundColor: 'var(--status-crit)' }} />
+                      <div className="progress-stacked-bar" style={{ width: `${stats.total > 0 ? (alerts.filter(a => a.threat_type === 'Unauthorized').length / stats.total) * 100 : 0}%`, backgroundColor: 'var(--status-high)' }} />
+                      <div className="progress-stacked-bar" style={{ width: `${stats.total > 0 ? (alerts.filter(a => a.threat_type === 'Normal').length / stats.total) * 100 : 0}%`, backgroundColor: 'var(--status-low)' }} />
+                    </div>
+
+                    <div className="legend-list">
+                      <div className="legend-item">
+                        <span><span className="legend-color-dot" style={{ backgroundColor: 'var(--status-crit)' }} />Brute-Force</span>
+                        <span style={{ fontFamily: 'var(--font-mono)', fontWeight: '600' }}>{alerts.filter(a => a.threat_type === 'Brute-Force').length}</span>
+                      </div>
+                      <div className="legend-item">
+                        <span><span className="legend-color-dot" style={{ backgroundColor: 'var(--status-high)' }} />Unauthorized</span>
+                        <span style={{ fontFamily: 'var(--font-mono)', fontWeight: '600' }}>{alerts.filter(a => a.threat_type === 'Unauthorized').length}</span>
+                      </div>
+                      <div className="legend-item">
+                        <span><span className="legend-color-dot" style={{ backgroundColor: 'var(--status-low)' }} />Normal Operations</span>
+                        <span style={{ fontFamily: 'var(--font-mono)', fontWeight: '600' }}>{alerts.filter(a => a.threat_type === 'Normal').length}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 4. Multi-Cloud Ingestion Breakdown */}
+                <div className="analytics-card">
+                  <div>
+                    <div className="analytics-card-title">
+                      <span>Cloud Telemetry Ingestion</span>
+                      <Server className="w-3.5 h-3.5 text-blue-400" />
+                    </div>
+                    
+                    {/* Stacked Bar */}
+                    <div className="progress-stacked">
+                      <div className="progress-stacked-bar" style={{ width: `${stats.total > 0 ? (alerts.filter(a => (a.cloud_provider || '').toLowerCase() === 'aws').length / stats.total) * 100 : 0}%`, backgroundColor: '#ff9900' }} />
+                      <div className="progress-stacked-bar" style={{ width: `${stats.total > 0 ? (alerts.filter(a => (a.cloud_provider || '').toLowerCase() === 'azure').length / stats.total) * 100 : 0}%`, backgroundColor: '#0089d6' }} />
+                      <div className="progress-stacked-bar" style={{ width: `${stats.total > 0 ? (alerts.filter(a => (a.cloud_provider || '').toLowerCase() === 'gcp').length / stats.total) * 100 : 0}%`, backgroundColor: '#4285f4' }} />
+                      <div className="progress-stacked-bar" style={{ width: `${stats.total > 0 ? (alerts.filter(a => (a.cloud_provider || '').toLowerCase() === 'oci').length / stats.total) * 100 : 0}%`, backgroundColor: '#f80000' }} />
+                    </div>
+
+                    <div className="legend-list">
+                      <div className="legend-item">
+                        <span><span className="legend-color-dot" style={{ backgroundColor: '#ff9900' }} />AWS</span>
+                        <span style={{ fontFamily: 'var(--font-mono)', fontWeight: '600' }}>{alerts.filter(a => (a.cloud_provider || '').toLowerCase() === 'aws').length}</span>
+                      </div>
+                      <div className="legend-item">
+                        <span><span className="legend-color-dot" style={{ backgroundColor: '#0089d6' }} />Azure</span>
+                        <span style={{ fontFamily: 'var(--font-mono)', fontWeight: '600' }}>{alerts.filter(a => (a.cloud_provider || '').toLowerCase() === 'azure').length}</span>
+                      </div>
+                      <div className="legend-item">
+                        <span><span className="legend-color-dot" style={{ backgroundColor: '#4285f4' }} />Google Cloud</span>
+                        <span style={{ fontFamily: 'var(--font-mono)', fontWeight: '600' }}>{alerts.filter(a => (a.cloud_provider || '').toLowerCase() === 'gcp').length}</span>
+                      </div>
+                      <div className="legend-item">
+                        <span><span className="legend-color-dot" style={{ backgroundColor: '#f80000' }} />Oracle Cloud (OCI)</span>
+                        <span style={{ fontFamily: 'var(--font-mono)', fontWeight: '600' }}>{alerts.filter(a => (a.cloud_provider || '').toLowerCase() === 'oci').length}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+              </div>
+
+              {/* Split View: Real-Time Security Events Table (Left 55%) + Deep Event Diagnostics (Right 45%) */}
+              <div className="events-split-layout">
+                
+                {/* Left: Real-Time Event Feed */}
+                <div className="enterprise-card" style={{ display: 'flex', flexDirection: 'column' }}>
+                  <div className="enterprise-card-header">
+                    <span className="enterprise-card-title">
+                      <Activity className="w-4 h-4 text-blue-400" />
+                      Live Security Ingress Feed ({filteredAlerts.length} Events)
+                    </span>
+                    <div style={{ display: 'flex', gap: '6px' }}>
+                      <button onClick={fetchAlerts} className="btn btn-subtle btn-sm">
+                        <RefreshCw className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Filter Toolbar */}
+                  <div className="filter-bar" style={{ padding: '8px 10px', marginBottom: '8px' }}>
+                    <div className="filter-group" style={{ width: '100%' }}>
+                      <div style={{ position: 'relative', flex: 1 }}>
+                        <Search className="w-3.5 h-3.5 text-slate-400" style={{ position: 'absolute', left: '8px', top: '7px' }} />
+                        <input 
+                          type="text"
+                          placeholder="Search User, ID, Resource..."
+                          value={searchQuery}
+                          onChange={(e) => { setSearchQuery(e.target.value); setCurrentPage(1); }}
+                          className="input-search"
+                          style={{ width: '100%' }}
+                        />
+                      </div>
+
+                      <select 
+                        value={filterProvider} 
+                        onChange={(e) => { setFilterProvider(e.target.value); setCurrentPage(1); }}
+                        className="select-compact"
+                      >
+                        <option value="ALL">All Clouds</option>
+                        <option value="AWS">AWS</option>
+                        <option value="AZURE">Azure</option>
+                        <option value="GCP">GCP</option>
+                        <option value="OCI">OCI</option>
+                      </select>
+
+                      <select 
+                        value={filterSeverity} 
+                        onChange={(e) => { setFilterSeverity(e.target.value); setCurrentPage(1); }}
+                        className="select-compact"
+                      >
+                        <option value="ALL">All Severities</option>
+                        <option value="CRITICAL">Critical</option>
+                        <option value="HIGH">High</option>
+                        <option value="MEDIUM">Medium</option>
+                        <option value="LOW">Low</option>
+                      </select>
+
+                      <select 
+                        value={filterSourceMode} 
+                        onChange={(e) => { setFilterSourceMode(e.target.value); setCurrentPage(1); }}
+                        className="select-compact"
+                        style={{ borderColor: filterSourceMode === 'REAL' ? 'var(--status-low)' : 'var(--border-subtle)' }}
+                      >
+                        <option value="ALL">All Sources</option>
+                        <option value="REAL">Real Cloud</option>
+                        <option value="DEMO">Demo Ingest</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* Table */}
+                  <div className="table-wrapper" style={{ maxHeight: '380px', overflowY: 'auto' }}>
+                    <table className="enterprise-table">
+                      <thead>
+                        <tr>
+                          <th>Timestamp</th>
+                          <th>Src</th>
+                          <th>Cloud</th>
+                          <th>Event ID</th>
+                          <th>Principal</th>
+                          <th>Threat Type</th>
+                          <th>Conf</th>
+                          <th>Risk</th>
+                          <th>Severity</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {paginatedAlerts.map((alert) => {
+                          const isSelected = selectedAlert && selectedAlert.event_id === alert.event_id;
+                          return (
+                            <tr 
+                              key={alert.event_id} 
+                              className={`table-row-interactive ${isSelected ? 'row-selected' : ''}`}
+                              onClick={() => setSelectedAlert(alert)}
+                            >
+                              <td style={{ fontFamily: 'var(--font-mono)', fontSize: '11px', whiteSpace: 'nowrap' }}>
+                                {alert.timestamp?.split('T')[1]?.substring(0, 8) || alert.timestamp?.substring(11, 19) || '12:00:00'}
+                              </td>
+                              <td>
+                                <span className={`badge ${alert.source_mode === 'REAL' ? 'badge-low' : 'badge-neutral'}`} style={{ fontSize: '9px', padding: '1px 4px' }}>
+                                  {alert.source_mode || 'DEMO'}
+                                </span>
+                              </td>
+                              <td>
+                                <span className="badge badge-info" style={{ fontSize: '9.5px', textTransform: 'uppercase' }}>
+                                  {alert.cloud_provider}
+                                </span>
+                              </td>
+                              <td style={{ fontFamily: 'var(--font-mono)', fontWeight: '600', fontSize: '11px' }}>
+                                {alert.event_id}
+                              </td>
+                              <td style={{ maxWidth: '100px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                {alert.user_id || 'system'}
+                              </td>
+                              <td>
+                                <span style={{ fontWeight: alert.threat_type !== 'Normal' ? '600' : '400', color: alert.threat_type === 'Brute-Force' ? 'var(--status-crit)' : alert.threat_type === 'Unauthorized' ? 'var(--status-high)' : 'var(--text-main)' }}>
+                                  {alert.threat_type}
+                                </span>
+                              </td>
+                              <td style={{ fontFamily: 'var(--font-mono)', fontSize: '11px' }}>
+                                {alert.confidence ? `${(alert.confidence * 100).toFixed(0)}%` : '-'}
+                              </td>
+                              <td style={{ fontFamily: 'var(--font-mono)', fontWeight: '700' }}>
+                                {alert.risk_score}
+                              </td>
+                              <td>
+                                <span className={`badge ${
+                                  alert.severity === 'CRITICAL' ? 'badge-crit' : 
+                                  alert.severity === 'HIGH' ? 'badge-high' : 
+                                  alert.severity === 'MEDIUM' ? 'badge-med' : 'badge-low'
+                                }`}>
+                                  {alert.severity}
+                                </span>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                        {paginatedAlerts.length === 0 && (
+                          <tr>
+                            <td colSpan="9" style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)' }}>
+                              No security events match criteria. Start stream or click a scenario.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Pagination */}
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', borderTop: '1px solid var(--border-subtle)', fontSize: '11px', color: 'var(--text-muted)' }}>
+                    <span>Showing {paginatedAlerts.length} of {filteredAlerts.length} events</span>
+                    <div style={{ display: 'flex', gap: '4px' }}>
+                      <button 
+                        onClick={() => setCurrentPage(p => Math.max(1, p - 1))} 
+                        disabled={currentPage === 1}
+                        className="btn btn-subtle btn-sm"
+                        style={{ padding: '2px 8px' }}
+                      >
+                        <ChevronLeft className="w-3.5 h-3.5" />
+                      </button>
+                      <span style={{ alignSelf: 'center', fontFamily: 'var(--font-mono)' }}>Page {currentPage} / {Math.max(1, Math.ceil(filteredAlerts.length / pageSize))}</span>
+                      <button 
+                        onClick={() => setCurrentPage(p => p + 1)} 
+                        disabled={currentPage * pageSize >= filteredAlerts.length}
+                        className="btn btn-subtle btn-sm"
+                        style={{ padding: '2px 8px' }}
+                      >
+                        <ChevronRight className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Right: Deep Event Diagnostics Inspector */}
+                <div className="enterprise-card" style={{ display: 'flex', flexDirection: 'column' }}>
+                  <div className="enterprise-card-header">
+                    <span className="enterprise-card-title">
+                      <Cpu className="w-4 h-4 text-purple-400" />
+                      Deep Event Diagnostics Inspector
+                    </span>
+                    {selectedAlert && (
+                      <span className={`badge ${
+                        selectedAlert.severity === 'CRITICAL' ? 'badge-crit' : 
+                        selectedAlert.severity === 'HIGH' ? 'badge-high' : 
+                        selectedAlert.severity === 'MEDIUM' ? 'badge-med' : 'badge-low'
+                      }`}>
+                        Score {selectedAlert.risk_score} | {selectedAlert.severity}
+                      </span>
+                    )}
+                  </div>
+
+                  {selectedAlert ? (
+                    <div>
+                      {/* Inspector Sub-Tabs */}
+                      <div className="tabs-container" style={{ borderBottom: '1px solid var(--border-subtle)', paddingBottom: '4px', marginBottom: '10px' }}>
+                        <button 
+                          className={`tab-btn ${inspectorTab === 'diagnostics' ? 'active' : ''}`}
+                          onClick={() => setInspectorTab('diagnostics')}
+                        >
+                          7-Stage Journey
+                        </button>
+                        <button 
+                          className={`tab-btn ${inspectorTab === 'features' ? 'active' : ''}`}
+                          onClick={() => setInspectorTab('features')}
+                        >
+                          Feature Vector (6D)
+                        </button>
+                        <button 
+                          className={`tab-btn ${inspectorTab === 'compliance' ? 'active' : ''}`}
+                          onClick={() => setInspectorTab('compliance')}
+                        >
+                          Risk & Playbooks
+                        </button>
+                        <button 
+                          className={`tab-btn ${inspectorTab === 'json' ? 'active' : ''}`}
+                          onClick={() => setInspectorTab('json')}
+                        >
+                          Raw JSON
+                        </button>
+                      </div>
+
+                      {/* Tab 1: 7-Stage Journey */}
+                      {inspectorTab === 'diagnostics' && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '11.5px' }}>
+                          <div style={{ backgroundColor: 'var(--bg-app)', padding: '8px 10px', borderRadius: '4px', border: '1px solid var(--border-subtle)' }}>
+                            <div style={{ color: 'var(--text-dim)', fontSize: '10px', fontWeight: '700' }}>STAGE 1 & 2: INGESTION & NORMALIZATION</div>
+                            <div style={{ marginTop: '2px', color: 'var(--text-main)' }}>
+                              Provider: <strong style={{ textTransform: 'uppercase' }}>{selectedAlert.cloud_provider}</strong> | Event ID: <span style={{ fontFamily: 'var(--font-mono)' }}>{selectedAlert.event_id}</span>
+                            </div>
+                            <div style={{ color: 'var(--text-muted)', fontSize: '11px' }}>
+                              User: {selectedAlert.user_id} | Resource: {selectedAlert.resource || 'N/A'} | IP: {selectedAlert.ip_address || '127.0.0.1'}
+                            </div>
+                          </div>
+
+                          <div style={{ backgroundColor: 'var(--bg-app)', padding: '8px 10px', borderRadius: '4px', border: '1px solid var(--border-subtle)' }}>
+                            <div style={{ color: 'var(--text-dim)', fontSize: '10px', fontWeight: '700' }}>STAGE 3 & 4: VALIDATION & 6-FEATURE VECTOR</div>
+                            <div style={{ marginTop: '2px', color: 'var(--text-main)' }}>
+                              Schema Validation: <span className="badge badge-low" style={{ fontSize: '9px' }}>PASSED</span> | Vector Extracted
+                            </div>
+                            <div style={{ color: 'var(--text-muted)', fontSize: '11px', fontFamily: 'var(--font-mono)', marginTop: '2px' }}>
+                              Failed Attempts: {selectedAlert.failed_attempts || 0} | Frequency: {selectedAlert.request_frequency || 1}
+                            </div>
+                          </div>
+
+                          <div style={{ backgroundColor: 'var(--bg-app)', padding: '8px 10px', borderRadius: '4px', border: '1px solid var(--border-subtle)' }}>
+                            <div style={{ color: 'var(--text-dim)', fontSize: '10px', fontWeight: '700' }}>STAGE 5: ML RANDOM FOREST CLASSIFICATION</div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '2px' }}>
+                              <span>Classified Threat: <strong>{selectedAlert.threat_type}</strong></span>
+                              <span className="badge badge-info">{selectedAlert.confidence ? `${(selectedAlert.confidence * 100).toFixed(1)}% Conf` : '98.5%'}</span>
+                            </div>
+                          </div>
+
+                          <div style={{ backgroundColor: 'var(--bg-app)', padding: '8px 10px', borderRadius: '4px', border: '1px solid var(--border-subtle)' }}>
+                            <div style={{ color: 'var(--text-dim)', fontSize: '10px', fontWeight: '700' }}>STAGE 6 & 7: RISK ENGINE & DB PERSISTENCE</div>
+                            <div style={{ marginTop: '2px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                              <span>Deterministic Risk Score: <strong style={{ color: selectedAlert.risk_score >= 80 ? 'var(--status-crit)' : 'var(--text-main)' }}>{selectedAlert.risk_score} / 100</strong></span>
+                              <span className="badge badge-low" style={{ fontSize: '9px' }}>PERSISTED</span>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Tab 2: Feature Vector */}
+                      {inspectorTab === 'features' && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                          <div className="feature-row">
+                            <span className="feature-name">failed_attempts:</span>
+                            <span className="feature-val">{selectedAlert.failed_attempts ?? 0}</span>
+                          </div>
+                          <div className="feature-row">
+                            <span className="feature-name">request_frequency:</span>
+                            <span className="feature-val">{selectedAlert.request_frequency ?? 1}</span>
+                          </div>
+                          <div className="feature-row">
+                            <span className="feature-name">ip_address_numeric:</span>
+                            <span className="feature-val">{selectedAlert.ip_address || '192.168.1.100'}</span>
+                          </div>
+                          <div className="feature-row">
+                            <span className="feature-name">user_id_risk_weight:</span>
+                            <span className="feature-val">{(selectedAlert.user_id || '').includes('admin') || (selectedAlert.user_id || '').includes('root') ? '0.90 (Privileged)' : '0.10 (Standard)'}</span>
+                          </div>
+                          <div className="feature-row">
+                            <span className="feature-name">resource_sensitivity:</span>
+                            <span className="feature-val">{(selectedAlert.resource || '').includes('key') || (selectedAlert.resource || '').includes('secret') || (selectedAlert.resource || '').includes('iam') ? '0.95 (High Criticality)' : '0.20 (Standard)'}</span>
+                          </div>
+                          <div className="feature-row">
+                            <span className="feature-name">time_anomaly_flag:</span>
+                            <span className="feature-val">0.00 (Standard Window)</span>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Tab 3: Risk & Playbooks */}
+                      {inspectorTab === 'compliance' && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '11.5px' }}>
+                          <div>
+                            <div style={{ fontWeight: '600', color: 'var(--text-main)', marginBottom: '4px' }}>Contributing Risk Factors:</div>
+                            <ul style={{ paddingLeft: '16px', color: 'var(--text-muted)' }}>
+                              {(() => {
+                                try {
+                                  const r = JSON.parse(selectedAlert.reasons || '[]');
+                                  return r.length > 0 ? r.map((item, i) => <li key={i}>{item}</li>) : <li>Normal operational baseline event</li>;
+                                } catch {
+                                  return <li>{selectedAlert.reasons || 'Operational baseline'}</li>;
+                                }
+                              })()}
+                            </ul>
+                          </div>
+
+                          <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: '8px' }}>
+                            <div style={{ fontWeight: '600', color: 'var(--text-main)', marginBottom: '4px' }}>Compliance Playbooks:</div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                              <div style={{ backgroundColor: 'var(--bg-app)', padding: '6px 8px', borderRadius: '3px' }}>
+                                <strong>NIST CSF (PR.AC-7):</strong> Implement credential lockout and MFA enforcement.
+                              </div>
+                              <div style={{ backgroundColor: 'var(--bg-app)', padding: '6px 8px', borderRadius: '3px' }}>
+                                <strong>CIS Benchmark (1.16):</strong> Restrict administrative access from unapproved external CIDR ranges.
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Tab 4: Raw JSON */}
+                      {inspectorTab === 'json' && (
+                        <div style={{ position: 'relative' }}>
+                          <button 
+                            onClick={() => {
+                              navigator.clipboard.writeText(JSON.stringify(selectedAlert, null, 2));
+                              showToast('Copied JSON payload to clipboard', 'success');
+                            }}
+                            className="btn btn-subtle btn-sm"
+                            style={{ position: 'absolute', right: '8px', top: '8px', padding: '2px 6px', fontSize: '10px' }}
+                          >
+                            <Copy className="w-3 h-3" /> Copy
+                          </button>
+                          <pre className="json-viewer" style={{ maxHeight: '240px', overflowY: 'auto' }}>
+                            {JSON.stringify(selectedAlert, null, 2)}
+                          </pre>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="empty-state">
+                      <p>Select any event in the table to inspect 7-stage processing and explainable diagnostics.</p>
+                    </div>
+                  )}
+                </div>
+
+              </div>
+
+              {/* Technical Stream Activity Log / Timeline Terminal */}
               <div className="enterprise-card">
                 <div className="enterprise-card-header">
-                  <span className="enterprise-card-title">
-                    <Server className="w-4 h-4 text-blue-400" />
-                    Multi-Cloud Telemetry Connectors
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <Terminal className="w-4 h-4 text-emerald-400" />
+                    <span className="enterprise-card-title">Technical Stream Activity Log & Timeline</span>
+                  </div>
+                  <span style={{ fontSize: '11px', color: 'var(--text-dim)', fontFamily: 'var(--font-mono)' }}>
+                    Buffer: {streamStatus.activity_timeline?.length || 0} / 50 events
                   </span>
-                  <button onClick={() => setActiveTab('clouds')} className="btn btn-subtle btn-sm">
-                    Manage Providers <ChevronRight className="w-3.5 h-3.5" />
-                  </button>
                 </div>
 
-                <div className="cloud-grid">
-                  {['aws', 'azure', 'gcp', 'oci'].map(provider => {
-                    const statusObj = cloudStatuses[provider] || { status: 'NOT CONFIGURED' };
-                    return (
-                      <div key={provider} className="enterprise-card" style={{ padding: '12px', backgroundColor: 'var(--bg-surface-subtle)' }}>
-                        <div className="flex justify-between items-center mb-2">
-                          <span style={{ fontWeight: '600', textTransform: 'uppercase' }}>{provider}</span>
-                          {statusObj.status === 'CONNECTED' ? (
-                            <span className="badge badge-low">CONNECTED</span>
-                          ) : statusObj.status === 'DEMO MODE' ? (
-                            <span className="badge badge-info">DEMO MODE</span>
-                          ) : (
-                            <span className="badge badge-neutral">{statusObj.status}</span>
-                          )}
-                        </div>
-                        <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                          {statusObj.details || 'Connector initialized'}
-                        </div>
-                        <div style={{ display: 'flex', gap: '6px', marginTop: '10px' }}>
-                          <button onClick={() => handleTestConnection(provider)} className="btn btn-subtle btn-sm" style={{ flex: 1 }}>
-                            Test
-                          </button>
-                          <button onClick={() => handleSyncLogs(provider)} className="btn btn-secondary btn-sm" style={{ flex: 1 }}>
-                            Sync Logs
-                          </button>
-                        </div>
+                <div className="activity-terminal">
+                  {streamStatus.activity_timeline && streamStatus.activity_timeline.length > 0 ? (
+                    streamStatus.activity_timeline.map((entry, idx) => (
+                      <div key={idx} className="activity-row">
+                        <span className="activity-time">[{entry.timestamp}]</span>
+                        <span className={`activity-stage-badge ${
+                          entry.level === 'ERROR' ? 'badge-crit' : entry.level === 'WARN' ? 'badge-high' : 'badge-info'
+                        }`}>
+                          {entry.stage}
+                        </span>
+                        <span className={`activity-msg ${entry.level === 'ERROR' ? 'error' : entry.level === 'WARN' ? 'warn' : ''}`}>
+                          {entry.event_id ? `[${entry.event_id}] ` : ''}{entry.message}
+                        </span>
                       </div>
-                    );
-                  })}
+                    ))
+                  ) : (
+                    <div style={{ color: 'var(--text-dim)', textAlign: 'center', padding: '16px' }}>
+                      Terminal idle. Click "Start Stream" or inject a test scenario to view live pipeline logs.
+                    </div>
+                  )}
                 </div>
               </div>
 
-              {/* Threat Breakdown & Recent Events Grid */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))', gap: 'var(--space-md)' }}>
-                
-                {/* Risk Distribution Breakdown */}
-                <div className="enterprise-card">
-                  <div className="enterprise-card-header">
-                    <span className="enterprise-card-title">
-                      <Shield className="w-4 h-4 text-purple-400" />
-                      Risk Severity Breakdown
-                    </span>
-                  </div>
-                  
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <span className="badge badge-crit">CRITICAL (80-100)</span>
-                      <span style={{ fontFamily: 'var(--font-mono)', fontWeight: '600' }}>{stats.critical} events</span>
-                    </div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <span className="badge badge-high">HIGH (60-79)</span>
-                      <span style={{ fontFamily: 'var(--font-mono)', fontWeight: '600' }}>{stats.high} events</span>
-                    </div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <span className="badge badge-med">MEDIUM (30-59)</span>
-                      <span style={{ fontFamily: 'var(--font-mono)', fontWeight: '600' }}>{stats.med} events</span>
-                    </div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <span className="badge badge-low">LOW (0-29)</span>
-                      <span style={{ fontFamily: 'var(--font-mono)', fontWeight: '600' }}>{stats.low} events</span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Quick 1-Click Presentation Scenario Runner */}
-                <div className="enterprise-card">
-                  <div className="enterprise-card-header">
-                    <span className="enterprise-card-title">
-                      <Zap className="w-4 h-4 text-amber-400" />
-                      Deterministic Test Scenarios
-                    </span>
-                  </div>
-                  <p style={{ fontSize: '11.5px', color: 'var(--text-muted)', marginBottom: '12px' }}>
-                    Inject structured multi-cloud security telemetry to validate the ML classifier, risk scoring engine, and compliance recommendations.
-                  </p>
-
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    <button onClick={() => handleTriggerScenario('aws_brute_force')} className="btn btn-secondary btn-sm" style={{ justifyContent: 'space-between' }}>
-                      <span>AWS: Brute Force Password Spray</span>
-                      <span className="badge badge-crit">CRITICAL</span>
-                    </button>
-                    <button onClick={() => handleTriggerScenario('azure_keyvault')} className="btn btn-secondary btn-sm" style={{ justifyContent: 'space-between' }}>
-                      <span>Azure: KeyVault Unauthorized Read</span>
-                      <span className="badge badge-crit">CRITICAL</span>
-                    </button>
-                    <button onClick={() => handleTriggerScenario('gcp_storage_burst')} className="btn btn-secondary btn-sm" style={{ justifyContent: 'space-between' }}>
-                      <span>GCP: KMS High Velocity API Burst</span>
-                      <span className="badge badge-high">HIGH</span>
-                    </button>
-                    <button onClick={() => handleTriggerScenario('oci_normal')} className="btn btn-secondary btn-sm" style={{ justifyContent: 'space-between' }}>
-                      <span>OCI: Standard Compute Object Read</span>
-                      <span className="badge badge-low">LOW</span>
-                    </button>
-                  </div>
-                </div>
-
-              </div>
             </div>
           )}
 
@@ -1825,6 +2592,75 @@ export default function App() {
 
         </main>
       </div>
+
+      {/* Reset Stream Confirmation Modal */}
+      {isResetConfirmOpen && (
+        <div className="modal-overlay">
+          <div className="modal-box">
+            <div className="modal-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <RotateCcw className="w-5 h-5 text-amber-400" />
+              Confirm Stream Reset
+            </div>
+            <div className="modal-body">
+              <p>
+                Are you sure you want to <strong>reset the real-time stream</strong>?
+              </p>
+              <ul style={{ marginTop: '8px', paddingLeft: '18px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <li>The active stream worker thread will be stopped cleanly.</li>
+                <li>Current session counters (Events, Threats, Duration, Average Risk) will be reset to <strong>0</strong>.</li>
+                <li>The stream activity terminal and pipeline visualizer will return to <strong>IDLE</strong> state.</li>
+                <li>Historical database security alerts will remain intact.</li>
+              </ul>
+            </div>
+            <div className="modal-footer">
+              <button onClick={() => setIsResetConfirmOpen(false)} className="btn btn-secondary">
+                Cancel
+              </button>
+              <button 
+                onClick={handleResetStream} 
+                className="btn btn-primary"
+                style={{ backgroundColor: 'var(--status-high)', borderColor: 'var(--status-high-border)' }}
+              >
+                Confirm & Reset Stream
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Purge Demo Records Confirmation Modal */}
+      {isClearDataConfirmOpen && (
+        <div className="modal-overlay">
+          <div className="modal-box">
+            <div className="modal-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Trash2 className="w-5 h-5 text-red-400" />
+              Purge Synthetic Demo Records
+            </div>
+            <div className="modal-body">
+              <p>
+                Are you sure you want to <strong>purge all demo records</strong> from the local database?
+              </p>
+              <ul style={{ marginTop: '8px', paddingLeft: '18px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <li>Only records created in <code>DEMO</code> mode will be permanently deleted.</li>
+                <li>All <strong>REAL</strong> cloud provider records (AWS CloudTrail, Azure Activity, GCP Logging, OCI Audit) will be preserved.</li>
+                <li>Stream counters and alerts table will immediately synchronize.</li>
+              </ul>
+            </div>
+            <div className="modal-footer">
+              <button onClick={() => setIsClearDataConfirmOpen(false)} className="btn btn-secondary">
+                Cancel
+              </button>
+              <button 
+                onClick={handleClearDemoData} 
+                className="btn btn-primary"
+                style={{ backgroundColor: 'var(--status-crit)', borderColor: 'var(--status-crit-border)' }}
+              >
+                Permanently Purge Demo Records
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );

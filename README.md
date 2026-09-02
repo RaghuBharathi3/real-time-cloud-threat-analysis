@@ -91,4 +91,4 @@ Run the automated test suite with pytest:
 pytest tests/
 ```
 
-Test Results: 28 passed, 0 failed across cloud adapters, pipeline stages, rate limiting, and REST endpoints.
+Test Results: 31 passed, 0 failed across stream engine lifecycle, cloud adapters, pipeline stages, rate limiting, and REST endpoints.

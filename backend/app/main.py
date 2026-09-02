@@ -13,7 +13,7 @@ from .modules.module1_event_collection import validate_security_event, SecurityE
 from .modules.module2_preprocessing import preprocess_event
 from .modules.module3_threat_detection import predict_threat, train_threat_model, get_loaded_metrics
 from .adapters import get_adapter, get_all_adapters, get_multi_cloud_status
-from .core.rate_limiter import check_rate_limit
+from .core import check_rate_limit, stream_engine
 
 # Initialize SQLite tables and default users
 init_db()
@@ -128,50 +128,24 @@ def sync_cloud_logs(
     for raw in raw_events:
         try:
             canonical = adapter.normalize_event(raw)
-            validated = validate_security_event(canonical)
-            features = preprocess_event(validated.model_dump())
-            threat_res = predict_threat(features, resource_name=validated.resource)
-
-            # Deduplication & Idempotency Check
-            existing = db.query(SecurityAlert).filter(SecurityAlert.event_id == validated.event_id).first()
-            if not existing:
-                db_alert = SecurityAlert(
-                    event_id=validated.event_id,
-                    timestamp=validated.timestamp,
-                    cloud_provider=validated.cloud_provider,
-                    user_id=validated.user_id,
-                    event_type=validated.event_type,
-                    ip_address=validated.ip_address,
-                    location=validated.location,
-                    failed_attempts=validated.failed_attempts,
-                    resource=validated.resource,
-                    request_frequency=validated.request_frequency,
-                    threat_status=threat_res["threat_status"],
-                    threat_type=threat_res["threat_type"],
-                    confidence=threat_res["confidence"],
-                    risk_score=threat_res["risk_score"],
-                    severity=threat_res["severity"],
-                    reasons=json.dumps(threat_res["reason"]),
-                    compliance_recommendations=json.dumps(threat_res.get("compliance", {})),
-                    source_mode=canonical.get("source_mode", adapter.source_mode)
-                )
-                db.add(db_alert)
-                db.commit()
-                new_inserted += 1
-            else:
+            existing = db.query(SecurityAlert).filter(SecurityAlert.event_id == canonical.get("event_id")).first()
+            if existing:
                 skipped_duplicates += 1
-
+            else:
+                new_inserted += 1
+                
+            processed_alert = stream_engine.process_event(canonical, source_mode=adapter.source_mode)
             processed.append({
-                "event_id": validated.event_id,
-                "cloud_provider": validated.cloud_provider,
-                "threat_status": threat_res["threat_status"],
-                "threat_type": threat_res["threat_type"],
-                "risk_score": threat_res["risk_score"],
-                "severity": threat_res["severity"],
-                "compliance": threat_res.get("compliance", {}),
-                "source_mode": canonical.get("source_mode", adapter.source_mode)
+                "event_id": processed_alert["event_id"],
+                "cloud_provider": processed_alert["cloud_provider"],
+                "threat_status": processed_alert["threat_status"],
+                "threat_type": processed_alert["threat_type"],
+                "risk_score": processed_alert["risk_score"],
+                "severity": processed_alert["severity"],
+                "compliance": json.loads(processed_alert["compliance_recommendations"]),
+                "source_mode": processed_alert["source_mode"]
             })
-        except Exception as e:
+        except Exception:
             continue
 
     log_audit_event(
@@ -207,51 +181,23 @@ def run_pipeline(
             detail=f"Security event ingestion from '{provider.upper()}' requires an upgraded Pro Subscription."
         )
 
-    # Module 1
-    validated_event = validate_security_event(raw_event)
-    
-    # Module 2
-    preprocessed_features = preprocess_event(validated_event.model_dump())
-    
-    # Module 3 + Risk Engine + Compliance Recommendations
-    threat_result = predict_threat(preprocessed_features, resource_name=validated_event.resource)
-    
-    # Store in Database
-    db_alert = SecurityAlert(
-        event_id=validated_event.event_id,
-        timestamp=validated_event.timestamp,
-        cloud_provider=validated_event.cloud_provider,
-        user_id=validated_event.user_id,
-        event_type=validated_event.event_type,
-        ip_address=validated_event.ip_address,
-        location=validated_event.location,
-        failed_attempts=validated_event.failed_attempts,
-        resource=validated_event.resource,
-        request_frequency=validated_event.request_frequency,
-        threat_status=threat_result["threat_status"],
-        threat_type=threat_result["threat_type"],
-        confidence=threat_result["confidence"],
-        risk_score=threat_result["risk_score"],
-        severity=threat_result["severity"],
-        reasons=json.dumps(threat_result["reason"]),
-        compliance_recommendations=json.dumps(threat_result.get("compliance", {})),
-        source_mode=raw_event.get("source_mode", "REAL")
-    )
-    
-    existing = db.query(SecurityAlert).filter(SecurityAlert.event_id == validated_event.event_id).first()
-    if not existing:
-        db.add(db_alert)
-        db.commit()
+    # Ingest through StreamEngine pipeline
+    processed_alert = stream_engine.process_event(raw_event, source_mode=raw_event.get("source_mode", "REAL"))
     
     return {
-        "event_id": validated_event.event_id,
-        "raw_event": validated_event.model_dump(),
-        "features": preprocessed_features,
-        "detection_result": threat_result,
-        "risk_score": threat_result["risk_score"],
-        "severity": threat_result["severity"],
-        "compliance": threat_result.get("compliance", {}),
-        "source_mode": raw_event.get("source_mode", "REAL")
+        "event_id": processed_alert["event_id"],
+        "raw_event": raw_event,
+        "features": preprocess_event(raw_event),
+        "detection_result": {
+            "threat_status": processed_alert["threat_status"],
+            "threat_type": processed_alert["threat_type"],
+            "confidence": processed_alert["confidence"],
+            "reason": json.loads(processed_alert["reasons"])
+        },
+        "risk_score": processed_alert["risk_score"],
+        "severity": processed_alert["severity"],
+        "compliance": json.loads(processed_alert["compliance_recommendations"]),
+        "source_mode": processed_alert["source_mode"]
     }
 
 # --- Deterministic Demo Scenarios ---
@@ -345,42 +291,21 @@ def trigger_demo_scenario(
             detail=f"Demo scenario for {unique_event['cloud_provider'].upper()} requires Pro Tier."
         )
 
-    # Ingest through entire Canonical Pipeline
-    val = validate_security_event(unique_event)
-    feat = preprocess_event(val.model_dump())
-    threat_res = predict_threat(feat, resource_name=val.resource)
-
-    db_alert = SecurityAlert(
-        event_id=val.event_id,
-        timestamp=val.timestamp,
-        cloud_provider=val.cloud_provider,
-        user_id=val.user_id,
-        event_type=val.event_type,
-        ip_address=val.ip_address,
-        location=val.location,
-        failed_attempts=val.failed_attempts,
-        resource=val.resource,
-        request_frequency=val.request_frequency,
-        threat_status=threat_res["threat_status"],
-        threat_type=threat_res["threat_type"],
-        confidence=threat_res["confidence"],
-        risk_score=threat_res["risk_score"],
-        severity=threat_res["severity"],
-        reasons=json.dumps(threat_res["reason"]),
-        compliance_recommendations=json.dumps(threat_res.get("compliance", {})),
-        source_mode="DEMO"
-    )
-    db.add(db_alert)
-    db.commit()
-
+    # Process through StreamEngine pipeline
+    processed_alert = stream_engine.process_event(unique_event, source_mode="DEMO")
     return {
-        "event_id": val.event_id,
-        "raw_event": val.model_dump(),
-        "features": feat,
-        "detection_result": threat_res,
-        "risk_score": threat_res["risk_score"],
-        "severity": threat_res["severity"],
-        "compliance": threat_res.get("compliance", {}),
+        "event_id": processed_alert["event_id"],
+        "raw_event": unique_event,
+        "features": preprocess_event(unique_event),
+        "detection_result": {
+            "threat_status": processed_alert["threat_status"],
+            "threat_type": processed_alert["threat_type"],
+            "confidence": processed_alert["confidence"],
+            "reason": json.loads(processed_alert["reasons"])
+        },
+        "risk_score": processed_alert["risk_score"],
+        "severity": processed_alert["severity"],
+        "compliance": json.loads(processed_alert["compliance_recommendations"]),
         "source_mode": "DEMO"
     }
 
@@ -404,45 +329,70 @@ def simulate_next_event(
     sample["timestamp"] = datetime.now(timezone.utc).isoformat()[:19]
     sample.pop("label", None)
     
-    # Process through pipeline
-    val = validate_security_event(sample)
-    feat = preprocess_event(val.model_dump())
-    threat_res = predict_threat(feat, resource_name=val.resource)
-    
-    db_alert = SecurityAlert(
-        event_id=val.event_id,
-        timestamp=val.timestamp,
-        cloud_provider=val.cloud_provider,
-        user_id=val.user_id,
-        event_type=val.event_type,
-        ip_address=val.ip_address,
-        location=val.location,
-        failed_attempts=val.failed_attempts,
-        resource=val.resource,
-        request_frequency=val.request_frequency,
-        threat_status=threat_res["threat_status"],
-        threat_type=threat_res["threat_type"],
-        confidence=threat_res["confidence"],
-        risk_score=threat_res["risk_score"],
-        severity=threat_res["severity"],
-        reasons=json.dumps(threat_res["reason"]),
-        compliance_recommendations=json.dumps(threat_res.get("compliance", {})),
-        source_mode="DEMO"
-    )
-    
-    db.add(db_alert)
-    db.commit()
+    # Process through StreamEngine pipeline
+    processed_alert = stream_engine.process_event(sample, source_mode="DEMO")
     
     return {
-        "event_id": val.event_id,
-        "raw_event": val.model_dump(),
-        "features": feat,
-        "detection_result": threat_res,
-        "risk_score": threat_res["risk_score"],
-        "severity": threat_res["severity"],
-        "compliance": threat_res.get("compliance", {}),
+        "event_id": processed_alert["event_id"],
+        "raw_event": sample,
+        "features": preprocess_event(sample),
+        "detection_result": {
+            "threat_status": processed_alert["threat_status"],
+            "threat_type": processed_alert["threat_type"],
+            "confidence": processed_alert["confidence"],
+            "reason": json.loads(processed_alert["reasons"])
+        },
+        "risk_score": processed_alert["risk_score"],
+        "severity": processed_alert["severity"],
+        "compliance": json.loads(processed_alert["compliance_recommendations"]),
         "source_mode": "DEMO"
     }
+
+# --- Real-Time Stream Engine Management ---
+
+@app.get("/api/v1/stream/status")
+def get_stream_status():
+    """Returns the authoritative real-time stream status, metrics, and pipeline states."""
+    return stream_engine.get_status()
+
+@app.post("/api/v1/stream/start", dependencies=[Depends(check_rate_limit("pipeline"))])
+def start_stream(
+    interval: float = 2.5,
+    user: UserProfile = Depends(require_admin)
+):
+    """Starts the continuous background stream session."""
+    res = stream_engine.start(interval_seconds=max(0.5, min(10.0, interval)))
+    if not res["success"]:
+        raise HTTPException(status_code=409, detail=res["message"])
+    return res
+
+@app.post("/api/v1/stream/stop", dependencies=[Depends(check_rate_limit("pipeline"))])
+def stop_stream(user: UserProfile = Depends(require_admin)):
+    """Stops the active stream session, preserving all session statistics and logs."""
+    return stream_engine.stop()
+
+@app.post("/api/v1/stream/reset", dependencies=[Depends(check_rate_limit("pipeline"))])
+def reset_stream(user: UserProfile = Depends(require_admin)):
+    """Resets all stream session metrics, buffers, and timeline back to clean IDLE state."""
+    return stream_engine.reset()
+
+@app.get("/api/v1/stream/events")
+def get_stream_events():
+    """Returns the list of processed events belonging to the current stream session."""
+    return {"events": stream_engine.session_events}
+
+@app.get("/api/v1/stream/activity")
+def get_stream_activity():
+    """Returns the chronological technical activity timeline."""
+    return {"activity": stream_engine.activity_timeline}
+
+@app.post("/api/v1/stream/clear-demo-data", dependencies=[Depends(check_rate_limit("admin"))])
+def clear_demo_data(user: UserProfile = Depends(require_admin), db: Session = Depends(get_db)):
+    """Administrative action: Wipes all DEMO events from the database (preserves REAL cloud events)."""
+    deleted_count = db.query(SecurityAlert).filter(SecurityAlert.source_mode == "DEMO").delete()
+    db.commit()
+    stream_engine.reset()
+    return {"success": True, "deleted_demo_records": deleted_count, "message": f"Successfully deleted {deleted_count} demo events."}
 
 # --- Alerts Feed ---
 
