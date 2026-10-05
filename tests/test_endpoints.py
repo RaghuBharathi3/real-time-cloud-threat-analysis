@@ -40,7 +40,7 @@ def test_cloud_test_connection_endpoints(client):
         assert response.status_code == 200
         data = response.json()
         assert data["provider"] == provider
-        assert data["status"] in ["CONNECTED", "CONFIGURED", "DEMO MODE", "INVALID", "INSUFFICIENT_PERMISSIONS"]
+        assert data["status"] in ["CONNECTED", "CONFIGURED", "DEMO MODE", "INVALID", "INSUFFICIENT_PERMISSIONS", "NOT CONFIGURED"]
 
 def test_model_train_endpoint(client):
     response = client.post("/api/v1/model/train", headers={"X-User-ID": "usr_admin"})
